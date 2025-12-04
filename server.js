@@ -1233,57 +1233,90 @@ async function syncItemsWithDatabase(items) {
 app.get('/api/catalog/top', async (req, res) => {
   try {
     const { currency = 'KZT', limit = 12 } = req.query;
-    const itemsLimit = Math.max(parseInt(limit), 1);
-    console.log(`🏆 Запрос топовых предметов (${currency}, лимит: ${itemsLimit})`);
-    // Всегда возвращаем синхронизированные данные
-    const topItems = getSyncedTopItems(currency).slice(0, itemsLimit);
+    const limitNum = Math.max(parseInt(limit), 1);
+
+    // 🔥 Читаем ТОП из базы через top_items → items
+    const result = await query(`
+      SELECT i.* 
+      FROM top_items ti
+      JOIN items i ON ti.item_id = i.id
+      WHERE i.is_active = true
+      ORDER BY ti.position ASC
+      LIMIT $1
+    `, [limitNum]);
+
+    const items = result.rows.map(item => {
+      const rate = currency === 'USD' ? 1 : 450;
+      const price = parseFloat(item.price);
+      const finalPrice = currency === 'USD' ? Math.round(price / 450 * 100) / 100 : price;
+      return {
+        ...item,
+        price: finalPrice,
+        display_price: `${finalPrice.toLocaleString('ru-RU')} ${currency === 'USD' ? '$' : '₸'}`,
+        steam_price: item.steam_price ? parseFloat(item.steam_price) : null,
+        discount_price: item.discount_price ? parseFloat(item.discount_price) : null,
+        has_discount: item.discount_price && parseFloat(item.discount_price) < parseFloat(item.price)
+      };
+    });
+
     res.json({
       success: true,
-      items: topItems,
-      total: topItems.length,
+      items,
+      total: items.length,
       category: 'top',
-      currency: currency,
-      source: 'synced',
+      currency,
+      source: 'database',
       timestamp: new Date().toISOString()
     });
   } catch (error) {
-    console.error('❌ Ошибка загрузки ТОП товаров:', error);
-    // Fallback на локальные данные
-    const fallbackItems = getSyncedTopItems(req.query.currency || 'KZT');
-    const finalItems = fallbackItems.slice(0, Math.max(parseInt(req.query.limit) || 12, 1));
-    res.json({
-      success: true,
-      items: finalItems,
-      total: finalItems.length,
-      category: 'top',
-      currency: req.query.currency || 'KZT',
-      source: 'fallback',
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-// Получение категорий
-app.get('/api/catalog/categories', async (req, res) => {
-  try {
-    const { game = 'cs2' } = req.query;
-    const result = await query(
-      `SELECT DISTINCT category FROM items WHERE game = $1 AND is_active = true AND category IS NOT NULL ORDER BY category`,
-      [game]
-    );
-    const categories = result.rows.map(row => row.category).filter(Boolean);
-    res.json({
-      success: true,
-      categories: categories,
-      game: game,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    console.error('❌ Ошибка загрузки категорий:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Ошибка загрузки категорий',
-      code: 'CATEGORIES_ERROR'
-    });
+    console.error('❌ /api/catalog/top ошибка:', error);
+    // 🔁 Fallback: если top_items пуста или таблицы нет — синхронизируем и пробуем снова
+    await syncInitialItems();
+    // Повторный запрос
+    try {
+      const retryResult = await query(`
+        SELECT i.* 
+        FROM top_items ti
+        JOIN items i ON ti.item_id = i.id
+        WHERE i.is_active = true
+        ORDER BY ti.position ASC
+        LIMIT $1
+      `, [Math.max(parseInt(req.query.limit) || 12, 1)]);
+      const items = retryResult.rows.map(item => {
+        const rate = req.query.currency === 'USD' ? 1 : 450;
+        const price = parseFloat(item.price);
+        const finalPrice = req.query.currency === 'USD' ? Math.round(price / 450 * 100) / 100 : price;
+        return {
+          ...item,
+          price: finalPrice,
+          display_price: `${finalPrice.toLocaleString('ru-RU')} ${req.query.currency === 'USD' ? '$' : '₸'}`,
+          steam_price: item.steam_price ? parseFloat(item.steam_price) : null,
+          discount_price: item.discount_price ? parseFloat(item.discount_price) : null,
+          has_discount: item.discount_price && parseFloat(item.discount_price) < parseFloat(item.price)
+        };
+      });
+      return res.json({
+        success: true,
+        items,
+        total: items.length,
+        category: 'top',
+        currency: req.query.currency || 'KZT',
+        source: 'database_after_sync',
+        timestamp: new Date().toISOString()
+      });
+    } catch (e2) {
+      // Крайний fallback на статику
+      const fallback = getSyncedTopItems(req.query.currency || 'KZT').slice(0, Math.max(parseInt(req.query.limit) || 12, 1));
+      res.json({
+        success: true,
+        items: fallback,
+        total: fallback.length,
+        category: 'top',
+        currency: req.query.currency || 'KZT',
+        source: 'fallback',
+        timestamp: new Date().toISOString()
+      });
+    }
   }
 });
 // Получение подкатегорий
@@ -2357,21 +2390,21 @@ async function syncInitialItems() {
     console.log('🔄 Синхронизация начальных данных с фронтендом...');
     const syncedItems = getSyncedTopItems('KZT');
     let syncedCount = 0;
+
     for (const item of syncedItems) {
       try {
-        // 🔧 ИСПРАВЛЕНИЕ: Проверяем существование предмета без ON CONFLICT сначала
         const existingItem = await query(
           'SELECT id FROM items WHERE market_hash_name = $1',
           [item.market_hash_name]
         );
         if (existingItem.rows.length === 0) {
-          // Добавляем новый предмет
-          await query(`
+          const insertResult = await query(`
             INSERT INTO items (
               name, price, image_url, rarity, quality, game, 
               market_hash_name, category, subcategory, 
               is_active, is_featured, is_trending, steam_price, created_at
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+            RETURNING id
           `, [
             item.name,
             item.price,
@@ -2390,7 +2423,6 @@ async function syncInitialItems() {
           console.log(`✅ Добавлен новый предмет: ${item.name}`);
           syncedCount++;
         } else {
-          // Обновляем существующий предмет
           await query(`
             UPDATE items SET
               name = $1,
@@ -2419,47 +2451,32 @@ async function syncInitialItems() {
         }
       } catch (err) {
         console.warn(`⚠️ Ошибка синхронизации предмета "${item.name}":`, err.message);
-        // 🔧 АЛЬТЕРНАТИВНЫЙ СПОСОБ: Пробуем без market_hash_name constraint
-        try {
-          // Проверяем по name если market_hash_name не работает
-          const existingByName = await query(
-            'SELECT id FROM items WHERE name = $1',
-            [item.name]
-          );
-          if (existingByName.rows.length === 0) {
-            await query(`
-              INSERT INTO items (
-                name, price, image_url, rarity, quality, game, 
-                category, subcategory, 
-                is_active, is_featured, is_trending, steam_price, created_at
-              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
-            `, [
-              item.name,
-              item.price,
-              item.image_url,
-              item.rarity,
-              item.quality,
-              'cs2',
-              item.category,
-              item.subcategory,
-              true,
-              item.is_featured,
-              item.is_trending,
-              item.steam_price
-            ]);
-            console.log(`✅ Добавлен (альтернативный способ): ${item.name}`);
-            syncedCount++;
-          }
-        } catch (innerErr) {
-          console.error(`❌ Критическая ошибка добавления "${item.name}":`, innerErr.message);
-        }
       }
     }
-    console.log(`✅ Синхронизировано ${syncedCount} из ${syncedItems.length} предметов`);
-    // Проверяем количество товаров в БД
-    const check = await query('SELECT COUNT(*) as count FROM items');
-    const count = parseInt(check.rows[0].count);
-    console.log(`📊 Всего предметов в БД: ${count}`);
+
+    // 🔥 КЛЮЧЕВОЕ: Заполняем top_items на основе флагов
+    console.log('🔄 Синхронизация top_items на основе is_featured/is_trending...');
+    await query('DELETE FROM top_items'); // Очищаем перед пересозданием
+
+    const trendingItems = await query(`
+      SELECT id FROM items 
+      WHERE (is_trending = true OR is_featured = true) 
+        AND is_active = true
+      ORDER BY is_featured DESC, is_trending DESC, created_at DESC
+      LIMIT 10
+    `);
+
+    for (let i = 0; i < trendingItems.rows.length; i++) {
+      const itemId = trendingItems.rows[i].id;
+      await query(
+        'INSERT INTO top_items (item_id, position) VALUES ($1, $2)',
+        [itemId, i + 1]
+      );
+    }
+
+    console.log(`✅ Синхронизировано ${syncedCount} предметов и ${trendingItems.rows.length} ТОП-позиций`);
+    const totalCount = await query('SELECT COUNT(*) as count FROM items');
+    console.log(`📊 Всего предметов в БД: ${parseInt(totalCount.rows[0].count)}`);
   } catch (error) {
     console.error('❌ Ошибка синхронизации начальных данных:', error);
   }
