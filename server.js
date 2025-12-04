@@ -2749,4 +2749,10 @@ async function syncInitialItems() {
   }
 }
 
+function startServer() {
+  app.listen(PORT, () => {
+    console.log(`🚀 Server запущен на порту ${PORT}!`);
+  });
+}
+
 startServer();
