@@ -13,32 +13,24 @@ import { query, initDB } from './db.js';
 import { steamService } from './services/steamService.js';
 import { steamAuth } from './services/steamAuth.js';
 import { makePaymentRequest, paymentUtils } from './services/paymentProxy.js';
-
 dotenv.config();
-
 const app = express();
 const PORT = parseInt(process.env.PORT || '5000', 10);
-
 // 🔧 ВАЖНО ДЛЯ ПРОКСИ
 app.set('trust proxy', true);
-
 // 🔑 Секреты из .env
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET;
 const SESSION_SECRET = process.env.SESSION_SECRET;
-
 // ✅ URL из .env
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://skinssale.kz';
 const BACKEND_URL = process.env.BACKEND_URL || 'https://backanedservaksale-production.up.railway.app';
-
 console.log('🌐 Frontend URL (на Beget):', FRONTEND_URL);
 console.log('🔧 Backend URL:', BACKEND_URL);
 console.log('🔒 NODE_ENV:', process.env.NODE_ENV);
-
 // ==================== 🛡️ БЕЗОПАСНОСТЬ ====================
 app.use(hpp());
 app.use(mongoSanitize());
-
 // 🔐 CSP
 const cspDirectives = {
   defaultSrc: ["'self'"],
@@ -76,20 +68,17 @@ const cspDirectives = {
   fontSrc: ["'self'", "https://fonts.gstatic.com"],
   formAction: ["'self'", "https://steamcommunity.com", "https://sandboxmerch.paymtech.kz"]
 };
-
 app.use(helmet({
   contentSecurityPolicy: { directives: cspDirectives },
   crossOriginEmbedderPolicy: false,
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
-
 // 🌐 CORS
 const corsOptions = {
   origin: function (origin, callback) {
     if (process.env.NODE_ENV === 'development') {
       return callback(null, true);
     }
-    
     const allowedOrigins = [
       'http://skinssale.kz',
       'https://skinssale.kz',
@@ -110,13 +99,10 @@ const corsOptions = {
       `https://www.${FRONTEND_URL.replace('https://', '').replace('http://', '').replace('www.', '')}`,
       'null'
     ];
-    
     const allowed = [...new Set(allowedOrigins.filter(Boolean).map(u => u.trim().replace(/\/+$/, '')))];
-    
     if (!origin) {
       return callback(null, true);
     }
-    
     const originMatches = allowed.some(allowedOrigin => {
       if (allowedOrigin.includes('*')) {
         const regex = new RegExp('^' + allowedOrigin.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$');
@@ -124,7 +110,6 @@ const corsOptions = {
       }
       return origin === allowedOrigin;
     });
-    
     if (originMatches) {
       callback(null, true);
     } else {
@@ -147,20 +132,16 @@ const corsOptions = {
   exposedHeaders: ['Content-Range', 'X-Content-Range', 'X-Total-Count'],
   maxAge: 86400
 };
-
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
-
 app.use(cookieParser(SESSION_SECRET));
 app.use(compression());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
 // 🔍 Middleware для логирования запросов
 app.use((req, res, next) => {
   const authHeader = req.headers.authorization;
   const accessToken = req.cookies.accessToken;
-  
   if (authHeader || accessToken) {
     console.log(`🔐 ${req.method} ${req.path} - Авторизация: ${authHeader ? 'Header' : 'Cookie'} token present - IP: ${req.ip}`);
   } else {
@@ -168,7 +149,6 @@ app.use((req, res, next) => {
   }
   next();
 });
-
 // ⏱️ Rate limiting
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -177,28 +157,23 @@ const generalLimiter = rateLimit({
   skip: (req) => req.path === '/health',
   keyGenerator: (req) => `${req.ip}-${req.get('user-agent')}`
 });
-
 const paymentLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 100,
   message: { error: 'Слишком много платежных запросов', code: 'PAYMENT_RATE_LIMITED' },
   keyGenerator: (req) => `${req.ip}-${req.get('user-agent')}`
 });
-
 const adminLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 200,
   message: { error: 'Слишком много запросов к админке', code: 'ADMIN_RATE_LIMITED' },
   keyGenerator: (req) => `${req.ip}-${req.get('user-agent')}`
 });
-
 app.use('/api/', generalLimiter);
 app.use('/api/payments/', paymentLimiter);
 app.use('/api/admin/', adminLimiter);
-
 // ==================== 🎯 ВАЛИДАЦИЯ ====================
 const validateSteamId = (steamId) => /^7656119\d{10}$/.test(steamId);
-
 // ==================== 🔐 УТИЛИТЫ ====================
 const generateTokens = (user) => {
   const accessToken = jwt.sign(
@@ -213,11 +188,9 @@ const generateTokens = (user) => {
   );
   return { accessToken, refreshToken };
 };
-
 const authenticateToken = async (req, res, next) => {
   try {
     let token = req.cookies.accessToken;
-    
     if (!token && req.headers.authorization) {
       const authHeader = req.headers.authorization;
       if (authHeader.startsWith('Bearer ')) {
@@ -226,13 +199,10 @@ const authenticateToken = async (req, res, next) => {
         token = authHeader;
       }
     }
-    
     if (!token && req.headers['x-access-token']) {
       token = req.headers['x-access-token'];
     }
-    
     console.log(`🔍 Проверка токена: ${token ? 'Присутствует' : 'Отсутствует'}`);
-    
     if (!token) {
       return res.status(401).json({ 
         error: 'Токен отсутствует', 
@@ -240,15 +210,12 @@ const authenticateToken = async (req, res, next) => {
         message: 'Пожалуйста, войдите в систему'
       });
     }
-    
     const decoded = jwt.verify(token, JWT_SECRET);
     console.log(`🔍 Декодированный токен для Steam ID: ${decoded.steamId}`);
-    
     const userResult = await query(
       'SELECT id, steam_id, username, avatar, balance, role, is_active FROM users WHERE steam_id = $1 AND is_active = true',
       [decoded.steamId]
     );
-    
     if (userResult.rows.length === 0) {
       console.log(`❌ Пользователь не найден или не активен: ${decoded.steamId}`);
       return res.status(401).json({ 
@@ -257,13 +224,11 @@ const authenticateToken = async (req, res, next) => {
         message: 'Ваш аккаунт не найден или заблокирован'
       });
     }
-    
     req.user = userResult.rows[0];
     console.log(`✅ Авторизация успешна: ${req.user.username} (${req.user.role})`);
     next();
   } catch (error) {
     console.error('❌ Ошибка аутентификации:', error.message);
-    
     if (error.name === 'TokenExpiredError') {
       return res.status(401).json({ 
         error: 'Токен истек', 
@@ -271,7 +236,6 @@ const authenticateToken = async (req, res, next) => {
         message: 'Ваша сессия истекла, войдите снова'
       });
     }
-    
     if (error.name === 'JsonWebTokenError') {
       return res.status(403).json({ 
         error: 'Неверный токен', 
@@ -279,7 +243,6 @@ const authenticateToken = async (req, res, next) => {
         message: 'Недействительный токен авторизации'
       });
     }
-    
     return res.status(403).json({ 
       error: 'Ошибка аутентификации', 
       code: 'AUTH_ERROR',
@@ -287,7 +250,6 @@ const authenticateToken = async (req, res, next) => {
     });
   }
 };
-
 const requireAdmin = (req, res, next) => {
   if (req.user.role !== 'admin' && req.user.role !== 'owner') {
     console.log(`🚫 Недостаточно прав: ${req.user.username} имеет роль ${req.user.role}`);
@@ -300,7 +262,6 @@ const requireAdmin = (req, res, next) => {
   console.log(`👑 Доступ к админке разрешен: ${req.user.username} (${req.user.role})`);
   next();
 };
-
 const requireOwner = (req, res, next) => {
   if (req.user.role !== 'owner') {
     console.log(`🚫 Недостаточно прав владельца: ${req.user.username} имеет роль ${req.user.role}`);
@@ -313,7 +274,6 @@ const requireOwner = (req, res, next) => {
   console.log(`👑 Доступ владельца разрешен: ${req.user.username}`);
   next();
 };
-
 // ==================== 💰 БАЛАНС И ПЛАТЕЖИ ====================
 // 💵 ПОПОЛНЕНИЕ БАЛАНСА
 app.post('/api/payments/deposit', authenticateToken, async (req, res) => {
@@ -343,21 +303,17 @@ app.post('/api/payments/deposit', authenticateToken, async (req, res) => {
         expiration_timeout: '30m'
       }
     }));
-
     if (result.statusCode === 201 || result.statusCode === 200) {
       const order = result.data.orders?.[0];
       if (!order) {
         throw new Error('No order data in response');
       }
-
       await query(
         `INSERT INTO payments (user_id, order_id, amount, currency, status, type) 
          VALUES ($1, $2, $3, $4, $5, $6)`,
         [req.user.id, order.id, amount, currency, 'pending', 'deposit']
       );
-
       let paymentUrl = result.data.payment_url || result.headers?.location || `https://sandboxmerch.paymtech.kz/v2/pay/${order.id}`;
-
       console.log(`🔗 Платежная ссылка: ${paymentUrl}`);
       res.json({
         success: true,
@@ -380,7 +336,6 @@ app.post('/api/payments/deposit', authenticateToken, async (req, res) => {
     });
   }
 });
-
 // 🔄 СОВМЕСТИМОСТЬ СО СТАРЫМ ФРОНТЕНДОМ
 app.post('/api/payments/create', authenticateToken, async (req, res) => {
   try {
@@ -409,21 +364,17 @@ app.post('/api/payments/create', authenticateToken, async (req, res) => {
         expiration_timeout: '30m'
       }
     }));
-
     if (result.statusCode === 201 || result.statusCode === 200) {
       const order = result.data.orders?.[0];
       if (!order) {
         throw new Error('No order data in response');
       }
-
       await query(
         `INSERT INTO payments (user_id, order_id, amount, currency, status, type) 
          VALUES ($1, $2, $3, $4, $5, $6)`,
         [req.user.id, order.id, amount, currency, 'pending', 'deposit']
       );
-
       let paymentUrl = result.data.payment_url || result.headers?.location || `https://sandboxmerch.paymtech.kz/v2/pay/${order.id}`;
-
       res.json({
         success: true,
         orderId: order.id,
@@ -445,7 +396,6 @@ app.post('/api/payments/create', authenticateToken, async (req, res) => {
     });
   }
 });
-
 // 💸 ВЫВОД СРЕДСТВ
 app.post('/api/payments/withdraw', authenticateToken, async (req, res) => {
   try {
@@ -456,7 +406,6 @@ app.post('/api/payments/withdraw', authenticateToken, async (req, res) => {
         code: 'INVALID_AMOUNT' 
       });
     }
-
     const userResult = await query('SELECT balance FROM users WHERE id = $1', [req.user.id]);
     const currentBalance = parseFloat(userResult.rows[0].balance);
     if (currentBalance < amount) {
@@ -465,11 +414,8 @@ app.post('/api/payments/withdraw', authenticateToken, async (req, res) => {
         code: 'INSUFFICIENT_FUNDS' 
       });
     }
-
     console.log(`💸 Запрос на вывод ${amount} USD от пользователя ${req.user.steam_id}`);
-
     await query('UPDATE users SET balance = balance - $1 WHERE id = $2', [amount, req.user.id]);
-
     const withdrawResult = await query(
       `INSERT INTO payments (user_id, order_id, amount, currency, status, type, payment_method, wallet_number) 
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
@@ -484,10 +430,8 @@ app.post('/api/payments/withdraw', authenticateToken, async (req, res) => {
         wallet_number
       ]
     );
-
     const updatedUserResult = await query('SELECT balance FROM users WHERE id = $1', [req.user.id]);
     const newBalance = parseFloat(updatedUserResult.rows[0].balance);
-
     res.json({
       success: true,
       message: 'Запрос на вывод средств принят в обработку',
@@ -506,18 +450,15 @@ app.post('/api/payments/withdraw', authenticateToken, async (req, res) => {
     });
   }
 });
-
 // 🔍 ПРОВЕРКА СТАТУСА ПЛАТЕЖА
 app.get('/api/payments/status/:orderId', authenticateToken, async (req, res) => {
   try {
     const { orderId } = req.params;
     console.log(`🔍 Проверка статуса платежа: ${orderId}`);
-
     const paymentResult = await query(
       'SELECT * FROM payments WHERE order_id = $1 AND user_id = $2',
       [orderId, req.user.id]
     );
-
     if (paymentResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
@@ -525,7 +466,6 @@ app.get('/api/payments/status/:orderId', authenticateToken, async (req, res) => 
         code: 'PAYMENT_NOT_FOUND'
       });
     }
-
     const payment = paymentResult.rows[0];
     if (payment.type === 'deposit' && payment.status === 'pending') {
       const result = await makePaymentRequest({ method: 'GET', path: `/orders/${orderId}` });
@@ -541,12 +481,10 @@ app.get('/api/payments/status/:orderId', authenticateToken, async (req, res) => 
         }
       }
     }
-
     const updatedPaymentResult = await query('SELECT * FROM payments WHERE order_id = $1', [orderId]);
     const updatedPayment = updatedPaymentResult.rows[0];
     const userResult = await query('SELECT balance FROM users WHERE id = $1', [req.user.id]);
     const currentBalance = parseFloat(userResult.rows[0].balance);
-
     res.json({
       success: true,
       payment: updatedPayment,
@@ -562,7 +500,6 @@ app.get('/api/payments/status/:orderId', authenticateToken, async (req, res) => 
     });
   }
 });
-
 // 💰 ПОЛУЧЕНИЕ ТЕКУЩЕГО БАЛАНСА
 app.get('/api/user/balance', authenticateToken, async (req, res) => {
   try {
@@ -581,7 +518,6 @@ app.get('/api/user/balance', authenticateToken, async (req, res) => {
     });
   }
 });
-
 // 📋 ИСТОРИЯ ПЛАТЕЖЕЙ
 app.get('/api/payments/history', authenticateToken, async (req, res) => {
   try {
@@ -606,7 +542,6 @@ app.get('/api/payments/history', authenticateToken, async (req, res) => {
     );
     const userResult = await query('SELECT balance FROM users WHERE id = $1', [req.user.id]);
     const currentBalance = parseFloat(userResult.rows[0].balance);
-
     res.json({
       success: true,
       payments: paymentsResult.rows,
@@ -623,7 +558,6 @@ app.get('/api/payments/history', authenticateToken, async (req, res) => {
     });
   }
 });
-
 // 🧪 ТЕСТ ПЛАТЕЖНОЙ СИСТЕМЫ
 app.get('/api/payments/test', async (req, res) => {
   try {
@@ -644,7 +578,6 @@ app.get('/api/payments/test', async (req, res) => {
     });
   }
 });
-
 // ==================== ✅ STEAM AUTH FLOW ====================
 app.get('/api/auth/steam', (req, res) => {
   console.log('🔐 Запрос Steam аутентификации от:', req.ip);
@@ -657,7 +590,6 @@ app.get('/api/auth/steam', (req, res) => {
     res.status(500).json({ error: 'Ошибка инициации аутентификации', code: 'STEAM_INIT_ERROR' });
   }
 });
-
 app.get('/api/auth/steam/callback', async (req, res) => {
   try {
     console.log('🔐 Steam Callback получен через Apache прокси');
@@ -675,7 +607,6 @@ app.get('/api/auth/steam/callback', async (req, res) => {
     if (!queryParams || Object.keys(queryParams).length === 0) {
       return res.redirect(`${FRONTEND_URL}/auth?status=error&message=no_parameters`);
     }
-
     let steamId = await steamAuth.verifyAssertion(queryParams);
     if (!steamId) {
       steamId = await steamAuth.verifyAssertionSimple(queryParams);
@@ -683,10 +614,8 @@ app.get('/api/auth/steam/callback', async (req, res) => {
     if (!steamId) {
       return res.redirect(`${FRONTEND_URL}/auth?status=error&message=auth_failed`);
     }
-
     console.log(`✅ Успешная аутентификация Steam ID: ${steamId}`);
     const steamProfile = await steamAuth.getSteamProfile(steamId);
-
     let user;
     const result = await query('SELECT * FROM users WHERE steam_id = $1', [steamId]);
     if (result.rows.length === 0) {
@@ -707,7 +636,6 @@ app.get('/api/auth/steam/callback', async (req, res) => {
       user.avatar = steamProfile.avatar;
       console.log(`🔄 Обновлен пользователь: ${steamProfile.personaname}`);
     }
-
     const { accessToken, refreshToken } = generateTokens(user);
     const cookieOptions = {
       httpOnly: true,
@@ -718,7 +646,6 @@ app.get('/api/auth/steam/callback', async (req, res) => {
     };
     res.cookie('accessToken', accessToken, { ...cookieOptions, maxAge: 24 * 60 * 60 * 1000 });
     res.cookie('refreshToken', refreshToken, { ...cookieOptions, maxAge: 30 * 24 * 60 * 60 * 1000 });
-
     const userData = {
       id: user.id,
       steamId: user.steam_id,
@@ -735,7 +662,6 @@ app.get('/api/auth/steam/callback', async (req, res) => {
     res.redirect(`${FRONTEND_URL}/auth?status=error&message=${encodeURIComponent(error.message)}`);
   }
 });
-
 app.get('/api/auth/user', authenticateToken, async (req, res) => {
   try {
     res.json({
@@ -754,7 +680,6 @@ app.get('/api/auth/user', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Ошибка получения данных пользователя', code: 'USER_DATA_ERROR' });
   }
 });
-
 app.post('/api/auth/user-by-token', async (req, res) => {
   try {
     const { accessToken } = req.body;
@@ -792,7 +717,6 @@ app.post('/api/auth/user-by-token', async (req, res) => {
     res.status(500).json({ error: 'Ошибка получения данных пользователя', code: 'USER_DATA_ERROR' });
   }
 });
-
 app.post('/api/auth/refresh', async (req, res) => {
   try {
     const refreshToken = req.cookies.refreshToken;
@@ -829,13 +753,11 @@ app.post('/api/auth/refresh', async (req, res) => {
     res.status(403).json({ error: 'Неверный refresh token', code: 'INVALID_REFRESH_TOKEN' });
   }
 });
-
 app.post('/api/auth/logout', (req, res) => {
   res.clearCookie('accessToken', { domain: '.skinssale.kz', path: '/' });
   res.clearCookie('refreshToken', { domain: '.skinssale.kz', path: '/' });
   res.json({ success: true, message: 'Успешный выход' });
 });
-
 app.post('/api/auth/dev-login', async (req, res) => {
   if (process.env.NODE_ENV === 'production') {
     return res.status(403).json({ error: 'Метод недоступен в production', code: 'METHOD_DISABLED' });
@@ -894,7 +816,6 @@ app.post('/api/auth/dev-login', async (req, res) => {
     res.status(500).json({ error: 'Ошибка авторизации', code: 'AUTH_ERROR' });
   }
 });
-
 // ==================== 🚀 ОСНОВНЫЕ РОУТЫ ====================
 app.get('/api/user/profile', authenticateToken, async (req, res) => {
   try {
@@ -914,7 +835,6 @@ app.get('/api/user/profile', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Ошибка получения профиля', code: 'PROFILE_ERROR' });
   }
 });
-
 app.get('/api/steam/my-inventory', authenticateToken, async (req, res) => {
   try {
     const { appid = '730' } = req.query;
@@ -925,14 +845,13 @@ app.get('/api/steam/my-inventory', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Ошибка получения инвентаря', code: 'INVENTORY_ERROR' });
   }
 });
-
 // ==================== 🏪 КАТАЛОГ ТОВАРОВ ====================
 app.get('/api/catalog/items', async (req, res) => {
   try {
     const { 
       game = 'cs2', 
-      category, 
-      subcategory, 
+      category,
+      subcategory,
       search,
       minPrice,
       maxPrice,
@@ -945,9 +864,7 @@ app.get('/api/catalog/items', async (req, res) => {
       trending,
       currency = 'KZT'
     } = req.query;
-    
     const offset = (parseInt(page) - 1) * parseInt(limit);
-    
     let queryText = `
       SELECT 
         id, name, price, image_url, rarity, quality, game, 
@@ -958,66 +875,54 @@ app.get('/api/catalog/items', async (req, res) => {
       FROM items 
       WHERE is_active = true
     `;
-    
     let queryParams = [];
     let paramCount = 1;
-    
     if (game) {
       queryText += ` AND game = $${paramCount}`;
       queryParams.push(game);
       paramCount++;
     }
-    
     if (category) {
       queryText += ` AND category = $${paramCount}`;
       queryParams.push(category);
       paramCount++;
     }
-    
     if (subcategory) {
       queryText += ` AND subcategory = $${paramCount}`;
       queryParams.push(subcategory);
       paramCount++;
     }
-    
     if (search) {
       queryText += ` AND (name ILIKE $${paramCount} OR market_hash_name ILIKE $${paramCount})`;
       queryParams.push(`%${search}%`);
       paramCount++;
     }
-    
     if (minPrice) {
       queryText += ` AND price >= $${paramCount}`;
       queryParams.push(parseFloat(minPrice));
       paramCount++;
     }
-    
     if (maxPrice) {
       queryText += ` AND price <= $${paramCount}`;
       queryParams.push(parseFloat(maxPrice));
       paramCount++;
     }
-    
     if (rarity) {
       queryText += ` AND rarity = $${paramCount}`;
       queryParams.push(rarity);
       paramCount++;
     }
-    
     if (quality) {
       queryText += ` AND quality = $${paramCount}`;
       queryParams.push(quality);
       paramCount++;
     }
-    
     if (featured === 'true') {
       queryText += ` AND is_featured = true`;
     }
-    
     if (trending === 'true') {
       queryText += ` AND is_trending = true`;
     }
-    
     // Сортировка
     switch(sort) {
       case 'price_asc':
@@ -1034,24 +939,19 @@ app.get('/api/catalog/items', async (req, res) => {
         queryText += ' ORDER BY is_featured DESC, is_trending DESC, created_at DESC';
         break;
     }
-    
     // Получаем общее количество
     const countQuery = queryText.replace('SELECT id, name, price, image_url, rarity, quality, game, market_hash_name, category, subcategory, is_active, is_featured, is_trending, steam_price, discount_price, description, created_at, updated_at', 'SELECT COUNT(*)');
     const countResult = await query(countQuery, queryParams);
     const total = parseInt(countResult.rows[0].count);
-    
     // Добавляем лимит и оффсет
     queryText += ` LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
     queryParams.push(parseInt(limit), offset);
-    
     const itemsResult = await query(queryText, queryParams);
-    
     // Форматируем цены для указанной валюты
     const items = itemsResult.rows.map(item => {
       const rate = currency === 'USD' ? 1 : 450;
       const price = parseFloat(item.price);
       const finalPrice = currency === 'USD' ? Math.round(price / 450 * 100) / 100 : price;
-      
       return {
         ...item,
         price: finalPrice,
@@ -1061,7 +961,6 @@ app.get('/api/catalog/items', async (req, res) => {
         has_discount: item.discount_price && parseFloat(item.discount_price) < parseFloat(item.price)
       };
     });
-    
     res.json({
       success: true,
       items: items,
@@ -1093,18 +992,15 @@ app.get('/api/catalog/items', async (req, res) => {
     });
   }
 });
-
 // Получение одного товара
 app.get('/api/catalog/items/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { currency = 'KZT' } = req.query;
-    
     const result = await query(
       `SELECT * FROM items WHERE id = $1 AND is_active = true`,
       [id]
     );
-    
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
@@ -1112,12 +1008,10 @@ app.get('/api/catalog/items/:id', async (req, res) => {
         code: 'ITEM_NOT_FOUND'
       });
     }
-    
     const item = result.rows[0];
     const rate = currency === 'USD' ? 1 : 450;
     const price = parseFloat(item.price);
     const finalPrice = currency === 'USD' ? Math.round(price / 450 * 100) / 100 : price;
-    
     const formattedItem = {
       ...item,
       price: finalPrice,
@@ -1126,7 +1020,6 @@ app.get('/api/catalog/items/:id', async (req, res) => {
       discount_price: item.discount_price ? parseFloat(item.discount_price) : null,
       has_discount: item.discount_price && parseFloat(item.discount_price) < parseFloat(item.price)
     };
-    
     res.json({
       success: true,
       item: formattedItem,
@@ -1142,13 +1035,11 @@ app.get('/api/catalog/items/:id', async (req, res) => {
     });
   }
 });
-
 // ==================== 🏆 ТОП ПРЕДМЕТЫ ====================
 // 🔧 ФУНКЦИЯ ДЛЯ СИНХРОНИЗИРОВАННЫХ ДАННЫХ
 function getSyncedTopItems(currency = 'KZT') {
   const rate = currency === 'USD' ? 1 : 450;
   const baseImagesUrl = 'https://cdn2.csgo.com/item/image/width=458/';
-  
   const syncedItems = [
     {
       id: 'ak-47-redline-field-tested',
@@ -1267,10 +1158,8 @@ function getSyncedTopItems(currency = 'KZT') {
       steam_price: Math.round(75.00 * rate)
     }
   ];
-  
   return syncedItems;
 }
-
 // 🔧 ФУНКЦИЯ СИНХРОНИЗАЦИИ С БАЗОЙ ДАННЫХ
 async function syncItemsWithDatabase(items) {
   try {
@@ -1281,7 +1170,6 @@ async function syncItemsWithDatabase(items) {
           'SELECT id FROM items WHERE market_hash_name = $1',
           [item.market_hash_name]
         );
-        
         if (existingItem.rows.length === 0) {
           // Добавляем новый предмет
           await query(`
@@ -1342,17 +1230,13 @@ async function syncItemsWithDatabase(items) {
     console.error('❌ Ошибка синхронизации с БД:', error.message);
   }
 }
-
 app.get('/api/catalog/top', async (req, res) => {
   try {
     const { currency = 'KZT', limit = 12 } = req.query;
     const itemsLimit = Math.max(parseInt(limit), 1);
-    
     console.log(`🏆 Запрос топовых предметов (${currency}, лимит: ${itemsLimit})`);
-    
     // Всегда возвращаем синхронизированные данные
     const topItems = getSyncedTopItems(currency).slice(0, itemsLimit);
-    
     res.json({
       success: true,
       items: topItems,
@@ -1364,11 +1248,9 @@ app.get('/api/catalog/top', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Ошибка загрузки ТОП товаров:', error);
-    
     // Fallback на локальные данные
     const fallbackItems = getSyncedTopItems(req.query.currency || 'KZT');
     const finalItems = fallbackItems.slice(0, Math.max(parseInt(req.query.limit) || 12, 1));
-
     res.json({
       success: true,
       items: finalItems,
@@ -1380,19 +1262,15 @@ app.get('/api/catalog/top', async (req, res) => {
     });
   }
 });
-
 // Получение категорий
 app.get('/api/catalog/categories', async (req, res) => {
   try {
     const { game = 'cs2' } = req.query;
-    
     const result = await query(
       `SELECT DISTINCT category FROM items WHERE game = $1 AND is_active = true AND category IS NOT NULL ORDER BY category`,
       [game]
     );
-    
     const categories = result.rows.map(row => row.category).filter(Boolean);
-    
     res.json({
       success: true,
       categories: categories,
@@ -1408,26 +1286,19 @@ app.get('/api/catalog/categories', async (req, res) => {
     });
   }
 });
-
 // Получение подкатегорий
 app.get('/api/catalog/subcategories', async (req, res) => {
   try {
     const { game = 'cs2', category } = req.query;
-    
     let queryText = `SELECT DISTINCT subcategory FROM items WHERE game = $1 AND is_active = true AND subcategory IS NOT NULL`;
     let queryParams = [game];
-    
     if (category) {
       queryText += ` AND category = $2`;
       queryParams.push(category);
     }
-    
     queryText += ` ORDER BY subcategory`;
-    
     const result = await query(queryText, queryParams);
-    
     const subcategories = result.rows.map(row => row.subcategory).filter(Boolean);
-    
     res.json({
       success: true,
       subcategories: subcategories,
@@ -1444,49 +1315,40 @@ app.get('/api/catalog/subcategories', async (req, res) => {
     });
   }
 });
-
 // ==================== 👑 АДМИНКА ====================
-
 // 📦 Управление товарами
 app.get('/api/admin/items', authenticateToken, requireAdmin, async (req, res) => {
   try {
     console.log(`📦 Админ: Запрос товаров от пользователя ${req.user.username}`);
     const { game, category, active, search, limit = 50, page = 1 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
-    
     let queryText = `
       SELECT * FROM items WHERE 1=1
     `;
     let queryParams = [];
     let paramCount = 1;
-    
     if (game) {
       queryText += ` AND game = $${paramCount}`;
       queryParams.push(game);
       paramCount++;
     }
-    
     if (category) {
       queryText += ` AND category = $${paramCount}`;
       queryParams.push(category);
       paramCount++;
     }
-    
     if (active !== undefined) {
       queryText += ` AND is_active = $${paramCount}`;
       queryParams.push(active === 'true');
       paramCount++;
     }
-    
     if (search) {
       queryText += ` AND (name ILIKE $${paramCount} OR market_hash_name ILIKE $${paramCount})`;
       queryParams.push(`%${search}%`);
       paramCount++;
     }
-    
     queryText += ` ORDER BY created_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
     queryParams.push(parseInt(limit), offset);
-    
     const itemsResult = await query(queryText, queryParams);
     const countResult = await query(
       `SELECT COUNT(*) FROM items WHERE 1=1` + 
@@ -1495,7 +1357,6 @@ app.get('/api/admin/items', authenticateToken, requireAdmin, async (req, res) =>
       (active !== undefined ? ` AND is_active = ${active === 'true'}` : ''),
       []
     );
-    
     res.json({
       success: true,
       items: itemsResult.rows,
@@ -1508,7 +1369,6 @@ app.get('/api/admin/items', authenticateToken, requireAdmin, async (req, res) =>
     res.status(500).json({ error: 'Ошибка получения товаров', code: 'ADMIN_ITEMS_ERROR' });
   }
 });
-
 // Создание товара
 app.post('/api/admin/items', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -1529,14 +1389,12 @@ app.post('/api/admin/items', authenticateToken, requireAdmin, async (req, res) =
       steam_price,
       discount_price
     } = req.body;
-    
     if (!name || !price || !image_url || !game) {
       return res.status(400).json({
         error: 'Заполните обязательные поля: название, цена, изображение, игра',
         code: 'VALIDATION_ERROR'
       });
     }
-    
     const result = await query(
       `INSERT INTO items (
         name, price, image_url, rarity, quality, game, market_hash_name,
@@ -1562,7 +1420,6 @@ app.post('/api/admin/items', authenticateToken, requireAdmin, async (req, res) =
         discount_price ? parseFloat(discount_price) : null
       ]
     );
-    
     res.json({
       success: true,
       item: result.rows[0],
@@ -1579,13 +1436,11 @@ app.post('/api/admin/items', authenticateToken, requireAdmin, async (req, res) =
     res.status(500).json({ error: 'Ошибка создания товара', code: 'CREATE_ITEM_ERROR' });
   }
 });
-
 // Обновление товара
 app.put('/api/admin/items/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
-    
     const currentResult = await query('SELECT * FROM items WHERE id = $1', [id]);
     if (currentResult.rows.length === 0) {
       return res.status(404).json({
@@ -1593,24 +1448,19 @@ app.put('/api/admin/items/:id', authenticateToken, requireAdmin, async (req, res
         code: 'ITEM_NOT_FOUND'
       });
     }
-    
     const currentItem = currentResult.rows[0];
-    
     const updateFields = [];
     const updateValues = [];
     let paramCount = 1;
-    
     const allowedFields = [
       'name', 'price', 'image_url', 'rarity', 'quality', 'game',
       'market_hash_name', 'category', 'subcategory', 'is_active',
       'is_featured', 'is_trending', 'description', 'steam_price',
       'discount_price'
     ];
-    
     allowedFields.forEach(field => {
       if (updates[field] !== undefined) {
         updateFields.push(`${field} = $${paramCount}`);
-        
         if (field === 'price' || field === 'steam_price' || field === 'discount_price') {
           updateValues.push(updates[field] ? parseFloat(updates[field]) : null);
         } else if (field === 'is_active' || field === 'is_featured' || field === 'is_trending') {
@@ -1618,33 +1468,26 @@ app.put('/api/admin/items/:id', authenticateToken, requireAdmin, async (req, res
         } else {
           updateValues.push(updates[field]);
         }
-        
         paramCount++;
       }
     });
-    
     if (updateFields.length === 0) {
       return res.status(400).json({
         error: 'Нет данных для обновления',
         code: 'NO_UPDATES'
       });
     }
-    
     updateFields.push(`updated_at = $${paramCount}`);
     updateValues.push(new Date());
     paramCount++;
-    
     updateValues.push(id);
-    
     const queryText = `
       UPDATE items 
       SET ${updateFields.join(', ')}
       WHERE id = $${paramCount}
       RETURNING *
     `;
-    
     const result = await query(queryText, updateValues);
-    
     res.json({
       success: true,
       item: result.rows[0],
@@ -1655,12 +1498,10 @@ app.put('/api/admin/items/:id', authenticateToken, requireAdmin, async (req, res
     res.status(500).json({ error: 'Ошибка обновления товара', code: 'UPDATE_ITEM_ERROR' });
   }
 });
-
 // Удаление товара
 app.delete('/api/admin/items/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    
     const checkResult = await query('SELECT * FROM items WHERE id = $1', [id]);
     if (checkResult.rows.length === 0) {
       return res.status(404).json({
@@ -1668,15 +1509,12 @@ app.delete('/api/admin/items/:id', authenticateToken, requireAdmin, async (req, 
         code: 'ITEM_NOT_FOUND'
       });
     }
-    
     try {
       await query('DELETE FROM top_items WHERE item_id = $1', [id]);
     } catch (error) {
       console.log('Товар не был в ТОПе или таблицы нет');
     }
-    
     await query('DELETE FROM items WHERE id = $1', [id]);
-    
     res.json({
       success: true,
       message: 'Товар успешно удален'
@@ -1686,25 +1524,21 @@ app.delete('/api/admin/items/:id', authenticateToken, requireAdmin, async (req, 
     res.status(500).json({ error: 'Ошибка удаления товара', code: 'DELETE_ITEM_ERROR' });
   }
 });
-
 // Изменение статуса активности
 app.put('/api/admin/items/:id/toggle', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { is_active } = req.body;
-    
     const result = await query(
       'UPDATE items SET is_active = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
       [Boolean(is_active), id]
     );
-    
     if (result.rows.length === 0) {
       return res.status(404).json({
         error: 'Товар не найден',
         code: 'ITEM_NOT_FOUND'
       });
     }
-    
     res.json({
       success: true,
       item: result.rows[0],
@@ -1715,25 +1549,21 @@ app.put('/api/admin/items/:id/toggle', authenticateToken, requireAdmin, async (r
     res.status(500).json({ error: 'Ошибка изменения статуса товара', code: 'TOGGLE_ITEM_ERROR' });
   }
 });
-
 // Изменение статуса рекомендуемого
 app.put('/api/admin/items/:id/featured', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { is_featured } = req.body;
-    
     const result = await query(
       'UPDATE items SET is_featured = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
       [Boolean(is_featured), id]
     );
-    
     if (result.rows.length === 0) {
       return res.status(404).json({
         error: 'Товар не найден',
         code: 'ITEM_NOT_FOUND'
       });
     }
-    
     res.json({
       success: true,
       item: result.rows[0],
@@ -1744,25 +1574,21 @@ app.put('/api/admin/items/:id/featured', authenticateToken, requireAdmin, async 
     res.status(500).json({ error: 'Ошибка изменения статуса рекомендуемого', code: 'TOGGLE_FEATURED_ERROR' });
   }
 });
-
 // Изменение статуса трендового
 app.put('/api/admin/items/:id/trending', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { is_trending } = req.body;
-    
     const result = await query(
       'UPDATE items SET is_trending = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
       [Boolean(is_trending), id]
     );
-    
     if (result.rows.length === 0) {
       return res.status(404).json({
         error: 'Товар не найден',
         code: 'ITEM_NOT_FOUND'
       });
     }
-    
     res.json({
       success: true,
       item: result.rows[0],
@@ -1773,7 +1599,6 @@ app.put('/api/admin/items/:id/trending', authenticateToken, requireAdmin, async 
     res.status(500).json({ error: 'Ошибка изменения статуса трендового', code: 'TOGGLE_TRENDING_ERROR' });
   }
 });
-
 // 🏆 Управление ТОП товарами
 app.get('/api/admin/top', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -1785,9 +1610,7 @@ app.get('/api/admin/top', authenticateToken, requireAdmin, async (req, res) => {
         WHERE i.is_active = true
         ORDER BY ti.position ASC
       `);
-      
       const top_item_ids = result.rows.map(row => row.item_id);
-      
       return res.json({
         success: true,
         top_item_ids: top_item_ids,
@@ -1796,7 +1619,6 @@ app.get('/api/admin/top', authenticateToken, requireAdmin, async (req, res) => {
     } catch (error) {
       console.log('Таблица top_items не найдена, создаем...');
     }
-    
     res.json({
       success: true,
       top_item_ids: [],
@@ -1807,21 +1629,17 @@ app.get('/api/admin/top', authenticateToken, requireAdmin, async (req, res) => {
     res.status(500).json({ error: 'Ошибка получения ТОП товаров', code: 'GET_TOP_ERROR' });
   }
 });
-
 // Сохранение ТОП товаров
 app.post('/api/admin/top', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { top_item_ids } = req.body;
-    
     if (!Array.isArray(top_item_ids)) {
       return res.status(400).json({
         error: 'Неверный формат данных',
         code: 'INVALID_DATA'
       });
     }
-    
     const limitedIds = top_item_ids.slice(0, 10);
-    
     try {
       await query(`
         CREATE TABLE IF NOT EXISTS top_items (
@@ -1835,12 +1653,9 @@ app.post('/api/admin/top', authenticateToken, requireAdmin, async (req, res) => 
     } catch (error) {
       console.log('Таблица top_items уже существует');
     }
-    
     await query('DELETE FROM top_items');
-    
     for (let i = 0; i < limitedIds.length; i++) {
       const itemId = limitedIds[i];
-      
       const itemCheck = await query('SELECT id FROM items WHERE id = $1 AND is_active = true', [itemId]);
       if (itemCheck.rows.length > 0) {
         await query(
@@ -1849,7 +1664,6 @@ app.post('/api/admin/top', authenticateToken, requireAdmin, async (req, res) => 
         );
       }
     }
-    
     res.json({
       success: true,
       top_item_ids: limitedIds,
@@ -1860,14 +1674,12 @@ app.post('/api/admin/top', authenticateToken, requireAdmin, async (req, res) => 
     res.status(500).json({ error: 'Ошибка сохранения ТОП товаров', code: 'SAVE_TOP_ERROR' });
   }
 });
-
 // 👥 Управление пользователями
 app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
   try {
     console.log(`👥 Админ: Запрос пользователей от ${req.user.username}`);
     const { page = 1, limit = 20, search, role } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
-    
     let queryText = `
       SELECT id, steam_id, username, avatar, balance, role, is_active, 
              created_at, updated_at, last_login
@@ -1875,29 +1687,24 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =>
     `;
     let queryParams = [];
     let paramCount = 1;
-    
     if (search) {
       queryText += ` AND (username ILIKE $${paramCount} OR steam_id::text LIKE $${paramCount})`;
       queryParams.push(`%${search}%`);
       paramCount++;
     }
-    
     if (role) {
       queryText += ` AND role = $${paramCount}`;
       queryParams.push(role);
       paramCount++;
     }
-    
     queryText += ` ORDER BY created_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
     queryParams.push(limit, offset);
-    
     const usersResult = await query(queryText, queryParams);
     const countResult = await query(
       'SELECT COUNT(*) as total FROM users' + 
       (search ? ` WHERE (username ILIKE '%${search}%' OR steam_id::text LIKE '%${search}%')` : ''),
       []
     );
-    
     res.json({ 
       success: true, 
       users: usersResult.rows,
@@ -1910,21 +1717,17 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =>
     res.status(500).json({ error: 'Ошибка получения пользователей', code: 'ADMIN_USERS_ERROR' });
   }
 });
-
 // Пополнение баланса пользователя
 app.post('/api/admin/update-balance', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { steamId, amount, reason } = req.body;
-    
     if (!steamId || !amount || amount <= 0) {
       return res.status(400).json({
         error: 'Неверные данные',
         code: 'INVALID_DATA'
       });
     }
-    
     await query('BEGIN');
-    
     const userResult = await query('SELECT id, balance FROM users WHERE steam_id = $1', [steamId]);
     if (userResult.rows.length === 0) {
       await query('ROLLBACK');
@@ -1933,12 +1736,9 @@ app.post('/api/admin/update-balance', authenticateToken, requireAdmin, async (re
         code: 'USER_NOT_FOUND'
       });
     }
-    
     const userId = userResult.rows[0].id;
     const currentBalance = parseFloat(userResult.rows[0].balance);
-    
     await query('UPDATE users SET balance = balance + $1 WHERE id = $2', [amount, userId]);
-    
     await query(
       `INSERT INTO payments (user_id, order_id, amount, currency, status, type, reason)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -1952,12 +1752,9 @@ app.post('/api/admin/update-balance', authenticateToken, requireAdmin, async (re
         reason || 'Административное пополнение'
       ]
     );
-    
     const newBalanceResult = await query('SELECT balance FROM users WHERE id = $1', [userId]);
     const newBalance = parseFloat(newBalanceResult.rows[0].balance);
-    
     await query('COMMIT');
-    
     res.json({
       success: true,
       amount: amount,
@@ -1971,24 +1768,20 @@ app.post('/api/admin/update-balance', authenticateToken, requireAdmin, async (re
     res.status(500).json({ error: 'Ошибка пополнения баланса', code: 'UPDATE_BALANCE_ERROR' });
   }
 });
-
 // Блокировка/разблокировка пользователя
 app.post('/api/admin/toggle-user', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { steamId, isActive } = req.body;
-    
     const result = await query(
       'UPDATE users SET is_active = $1, updated_at = NOW() WHERE steam_id = $2 RETURNING *',
       [Boolean(isActive), steamId]
     );
-    
     if (result.rows.length === 0) {
       return res.status(404).json({
         error: 'Пользователь не найден',
         code: 'USER_NOT_FOUND'
       });
     }
-    
     res.json({
       success: true,
       user: result.rows[0],
@@ -1999,7 +1792,6 @@ app.post('/api/admin/toggle-user', authenticateToken, requireAdmin, async (req, 
     res.status(500).json({ error: 'Ошибка изменения статуса пользователя', code: 'TOGGLE_USER_ERROR' });
   }
 });
-
 // 🛡️ Управление администраторами
 app.get('/api/admin/admins', authenticateToken, requireOwner, async (req, res) => {
   try {
@@ -2009,7 +1801,6 @@ app.get('/api/admin/admins', authenticateToken, requireOwner, async (req, res) =
        WHERE role IN ('admin', 'owner')
        ORDER BY role DESC, created_at ASC`
     );
-    
     res.json({
       success: true,
       admins: result.rows,
@@ -2020,19 +1811,16 @@ app.get('/api/admin/admins', authenticateToken, requireOwner, async (req, res) =
     res.status(500).json({ error: 'Ошибка получения списка администраторов', code: 'GET_ADMINS_ERROR' });
   }
 });
-
 // Добавление администратора
 app.post('/api/admin/admins', authenticateToken, requireOwner, async (req, res) => {
   try {
     const { steamId } = req.body;
-    
     if (!steamId || !validateSteamId(steamId)) {
       return res.status(400).json({
         error: 'Неверный Steam ID',
         code: 'INVALID_STEAM_ID'
       });
     }
-    
     const userResult = await query('SELECT * FROM users WHERE steam_id = $1', [steamId]);
     if (userResult.rows.length === 0) {
       return res.status(404).json({
@@ -2040,12 +1828,10 @@ app.post('/api/admin/admins', authenticateToken, requireOwner, async (req, res) 
         code: 'USER_NOT_FOUND'
       });
     }
-    
     const result = await query(
       'UPDATE users SET role = $1, updated_at = NOW() WHERE steam_id = $2 RETURNING *',
       ['admin', steamId]
     );
-    
     res.json({
       success: true,
       admin: result.rows[0],
@@ -2056,12 +1842,10 @@ app.post('/api/admin/admins', authenticateToken, requireOwner, async (req, res) 
     res.status(500).json({ error: 'Ошибка добавления администратора', code: 'ADD_ADMIN_ERROR' });
   }
 });
-
 // Удаление администратора
 app.delete('/api/admin/admins/:steamId', authenticateToken, requireOwner, async (req, res) => {
   try {
     const { steamId } = req.params;
-    
     const userResult = await query('SELECT role FROM users WHERE steam_id = $1', [steamId]);
     if (userResult.rows.length === 0) {
       return res.status(404).json({
@@ -2069,19 +1853,16 @@ app.delete('/api/admin/admins/:steamId', authenticateToken, requireOwner, async 
         code: 'USER_NOT_FOUND'
       });
     }
-    
     if (userResult.rows[0].role === 'owner') {
       return res.status(403).json({
         error: 'Нельзя удалить владельца',
         code: 'CANNOT_REMOVE_OWNER'
       });
     }
-    
     const result = await query(
       'UPDATE users SET role = $1, updated_at = NOW() WHERE steam_id = $2 RETURNING *',
       ['user', steamId]
     );
-    
     res.json({
       success: true,
       message: 'Администратор успешно удален'
@@ -2091,13 +1872,11 @@ app.delete('/api/admin/admins/:steamId', authenticateToken, requireOwner, async 
     res.status(500).json({ error: 'Ошибка удаления администратора', code: 'REMOVE_ADMIN_ERROR' });
   }
 });
-
 // 📊 Транзакции
 app.get('/api/admin/transactions', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { filter = 'all', limit = 50, page = 1 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
-    
     let queryText = `
       SELECT p.*, u.username, u.steam_id
       FROM payments p
@@ -2105,7 +1884,6 @@ app.get('/api/admin/transactions', authenticateToken, requireAdmin, async (req, 
       WHERE 1=1
     `;
     let queryParams = [];
-    
     if (filter === 'deposit') {
       queryText += ` AND p.type = 'deposit'`;
     } else if (filter === 'withdraw') {
@@ -2113,10 +1891,8 @@ app.get('/api/admin/transactions', authenticateToken, requireAdmin, async (req, 
     } else if (filter === 'pending') {
       queryText += ` AND p.status = 'pending'`;
     }
-    
     queryText += ` ORDER BY p.created_at DESC LIMIT $1 OFFSET $2`;
     queryParams.push(limit, offset);
-    
     const transactionsResult = await query(queryText, queryParams);
     const countResult = await query(
       `SELECT COUNT(*) FROM payments WHERE 1=1` +
@@ -2125,7 +1901,6 @@ app.get('/api/admin/transactions', authenticateToken, requireAdmin, async (req, 
       (filter === 'pending' ? ` AND status = 'pending'` : ''),
       []
     );
-    
     res.json({
       success: true,
       transactions: transactionsResult.rows,
@@ -2138,7 +1913,6 @@ app.get('/api/admin/transactions', authenticateToken, requireAdmin, async (req, 
     res.status(500).json({ error: 'Ошибка получения транзакций', code: 'ADMIN_TRANSACTIONS_ERROR' });
   }
 });
-
 // 📋 Статистика
 app.get('/api/admin/stats', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -2150,7 +1924,6 @@ app.get('/api/admin/stats', authenticateToken, requireAdmin, async (req, res) =>
         COUNT(*) FILTER (WHERE balance > 0) as users_with_balance
       FROM users
     `);
-    
     const itemsStats = await query(`
       SELECT 
         COUNT(*) as total_items,
@@ -2159,7 +1932,6 @@ app.get('/api/admin/stats', authenticateToken, requireAdmin, async (req, res) =>
         COUNT(*) FILTER (WHERE is_trending = true) as trending_items
       FROM items
     `);
-    
     const paymentsStats = await query(`
       SELECT 
         COUNT(*) as total_payments,
@@ -2170,7 +1942,6 @@ app.get('/api/admin/stats', authenticateToken, requireAdmin, async (req, res) =>
       FROM payments 
       WHERE status = 'completed'
     `);
-    
     const revenueStats = await query(`
       SELECT 
         DATE(created_at) as date,
@@ -2183,7 +1954,6 @@ app.get('/api/admin/stats', authenticateToken, requireAdmin, async (req, res) =>
       ORDER BY date DESC
       LIMIT 30
     `);
-    
     res.json({
       success: true,
       users: usersStats.rows[0],
@@ -2200,7 +1970,6 @@ app.get('/api/admin/stats', authenticateToken, requireAdmin, async (req, res) =>
     });
   }
 });
-
 // 📨 Управление тикетами
 app.get('/api/admin/tickets', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -2222,12 +1991,10 @@ app.get('/api/admin/tickets', authenticateToken, requireAdmin, async (req, res) 
     } catch (error) {
       console.log('Таблица support_tickets уже существует');
     }
-    
     const result = await query(`
       SELECT * FROM support_tickets 
       ORDER BY updated_at DESC
     `);
-    
     res.json({
       success: true,
       tickets: result.rows,
@@ -2238,20 +2005,17 @@ app.get('/api/admin/tickets', authenticateToken, requireAdmin, async (req, res) 
     res.status(500).json({ error: 'Ошибка получения тикетов', code: 'GET_TICKETS_ERROR' });
   }
 });
-
 // Ответ на тикет
 app.post('/api/admin/tickets/:id/reply', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { message } = req.body;
-    
     if (!message || message.trim() === '') {
       return res.status(400).json({
         error: 'Введите сообщение',
         code: 'EMPTY_MESSAGE'
       });
     }
-    
     const ticketResult = await query('SELECT * FROM support_tickets WHERE id = $1', [id]);
     if (ticketResult.rows.length === 0) {
       return res.status(404).json({
@@ -2259,10 +2023,8 @@ app.post('/api/admin/tickets/:id/reply', authenticateToken, requireAdmin, async 
         code: 'TICKET_NOT_FOUND'
       });
     }
-    
     const ticket = ticketResult.rows[0];
     const messages = ticket.messages || [];
-    
     const newMessage = {
       id: Date.now(),
       text: message.trim(),
@@ -2270,9 +2032,7 @@ app.post('/api/admin/tickets/:id/reply', authenticateToken, requireAdmin, async 
       senderName: req.user.username,
       timestamp: new Date().toISOString()
     };
-    
     messages.push(newMessage);
-    
     const updatedResult = await query(
       `UPDATE support_tickets 
        SET messages = $1, status = 'answered', updated_at = NOW()
@@ -2280,7 +2040,6 @@ app.post('/api/admin/tickets/:id/reply', authenticateToken, requireAdmin, async 
        RETURNING *`,
       [JSON.stringify(messages), id]
     );
-    
     res.json({
       success: true,
       ticket: updatedResult.rows[0],
@@ -2291,13 +2050,11 @@ app.post('/api/admin/tickets/:id/reply', authenticateToken, requireAdmin, async 
     res.status(500).json({ error: 'Ошибка отправки ответа', code: 'REPLY_TICKET_ERROR' });
   }
 });
-
 // Изменение статуса тикета
 app.put('/api/admin/tickets/:id/status', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
-    
     const allowedStatuses = ['open', 'answered', 'resolved', 'closed'];
     if (!allowedStatuses.includes(status)) {
       return res.status(400).json({
@@ -2305,19 +2062,16 @@ app.put('/api/admin/tickets/:id/status', authenticateToken, requireAdmin, async 
         code: 'INVALID_STATUS'
       });
     }
-    
     const result = await query(
       'UPDATE support_tickets SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
       [status, id]
     );
-    
     if (result.rows.length === 0) {
       return res.status(404).json({
         error: 'Тикет не найден',
         code: 'TICKET_NOT_FOUND'
       });
     }
-    
     res.json({
       success: true,
       ticket: result.rows[0],
@@ -2328,25 +2082,21 @@ app.put('/api/admin/tickets/:id/status', authenticateToken, requireAdmin, async 
     res.status(500).json({ error: 'Ошибка обновления статуса тикета', code: 'UPDATE_TICKET_STATUS_ERROR' });
   }
 });
-
 // ==================== 🏪 МАРКЕТ ====================
 app.get('/api/items/market', async (req, res) => {
   try {
     const { game = 'cs2', limit = 50, currency = 'KZT' } = req.query;
     console.log(`📦 Запрос предметов с парсера: ${game}, лимит: ${limit}`);
-    
     try {
       const dbResult = await query(
         `SELECT * FROM items WHERE game = $1 AND is_active = true ORDER BY created_at DESC LIMIT $2`,
         [game, parseInt(limit)]
       );
-      
       if (dbResult.rows.length > 0) {
         const items = dbResult.rows.map(item => {
           const rate = currency === 'USD' ? 1 : 450;
           const price = parseFloat(item.price);
           const finalPrice = currency === 'USD' ? Math.round(price / 450 * 100) / 100 : price;
-          
           return {
             ...item,
             price: finalPrice,
@@ -2356,7 +2106,6 @@ app.get('/api/items/market', async (req, res) => {
             has_discount: item.discount_price && parseFloat(item.discount_price) < parseFloat(item.price)
           };
         });
-        
         return res.json({
           success: true,
           items: items,
@@ -2370,9 +2119,7 @@ app.get('/api/items/market', async (req, res) => {
     } catch (dbError) {
       console.log('Не удалось загрузить из БД, используем fallback');
     }
-    
     const fallbackItems = getSyncedTopItems(currency).slice(0, parseInt(limit));
-    
     res.json({
       success: true,
       items: fallbackItems,
@@ -2391,7 +2138,6 @@ app.get('/api/items/market', async (req, res) => {
     });
   }
 });
-
 // Поиск
 app.get('/api/items/search', async (req, res) => {
   try {
@@ -2403,7 +2149,6 @@ app.get('/api/items/search', async (req, res) => {
         code: 'INVALID_SEARCH_QUERY'
       });
     }
-    
     const result = await query(
       `SELECT * FROM items 
        WHERE is_active = true 
@@ -2411,12 +2156,10 @@ app.get('/api/items/search', async (req, res) => {
        LIMIT $2`,
       [`%${query}%`, parseInt(limit)]
     );
-    
     const items = result.rows.map(item => {
       const rate = currency === 'USD' ? 1 : 450;
       const price = parseFloat(item.price);
       const finalPrice = currency === 'USD' ? Math.round(price / 450 * 100) / 100 : price;
-      
       return {
         ...item,
         price: finalPrice,
@@ -2426,7 +2169,6 @@ app.get('/api/items/search', async (req, res) => {
         has_discount: item.discount_price && parseFloat(item.discount_price) < parseFloat(item.price)
       };
     });
-    
     res.json({
       success: true,
       items: items,
@@ -2446,19 +2188,16 @@ app.get('/api/items/search', async (req, res) => {
     });
   }
 });
-
 // ==================== 🩺 HEALTH & START ====================
 app.get('/health', async (req, res) => {
   try {
     await query('SELECT 1');
-    
     const tablesCheck = await query(`
       SELECT 
         (SELECT COUNT(*) FROM items) as items_count,
         (SELECT COUNT(*) FROM users) as users_count,
         (SELECT COUNT(*) FROM payments) as payments_count
     `);
-    
     res.json({ 
       status: 'healthy', 
       database: 'OK',
@@ -2482,7 +2221,6 @@ app.get('/health', async (req, res) => {
     });
   }
 });
-
 // Обработка несуществующих API роутов
 app.use('/api/*', (req, res) => {
   res.status(404).json({ 
@@ -2491,7 +2229,6 @@ app.use('/api/*', (req, res) => {
     path: req.originalUrl 
   });
 });
-
 // Глобальный обработчик ошибок
 app.use((error, req, res, next) => {
   console.error('🚨 Глобальная ошибка:', error);
@@ -2501,12 +2238,10 @@ app.use((error, req, res, next) => {
     message: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
   });
 });
-
 // ==================== 🔧 ФУНКЦИЯ ОБНОВЛЕНИЯ БАЗЫ ДАННЫХ ====================
 const updateDatabase = async () => {
   try {
     console.log('🔄 Проверка структуры базы данных...');
-    
     // 1. Добавляем колонку email в users
     try {
       await query(`
@@ -2517,7 +2252,6 @@ const updateDatabase = async () => {
     } catch (e) {
       console.log('ℹ️ Колонка email уже существует:', e.message);
     }
-    
     // 2. Добавляем недостающие колонки в items
     const columnsToAdd = [
       { name: 'steam_price', type: 'NUMERIC(10,2)' },
@@ -2528,7 +2262,6 @@ const updateDatabase = async () => {
       { name: 'is_trending', type: 'BOOLEAN DEFAULT false' },
       { name: 'subcategory', type: 'TEXT' }
     ];
-    
     for (const column of columnsToAdd) {
       try {
         await query(`
@@ -2539,7 +2272,6 @@ const updateDatabase = async () => {
         console.log(`ℹ️ Колонка ${column.name} уже существует или ошибка:`, e.message);
       }
     }
-    
     // 3. Добавляем UNIQUE constraint для market_hash_name
     try {
       const checkConstraint = await query(`
@@ -2549,7 +2281,6 @@ const updateDatabase = async () => {
           AND constraint_type = 'UNIQUE' 
           AND constraint_name LIKE '%market_hash_name%'
       `);
-      
       if (checkConstraint.rows.length === 0) {
         await query(`
           ALTER TABLE items 
@@ -2562,7 +2293,6 @@ const updateDatabase = async () => {
     } catch (e) {
       console.log('ℹ️ Unique constraint для market_hash_name:', e.message);
     }
-    
     // 4. Создаем таблицу top_items
     try {
       await query(`
@@ -2578,7 +2308,6 @@ const updateDatabase = async () => {
     } catch (e) {
       console.log('ℹ️ Таблица top_items уже существует или ошибка:', e.message);
     }
-    
     // 5. Создаем таблицу promotions
     try {
       await query(`
@@ -2598,7 +2327,6 @@ const updateDatabase = async () => {
     } catch (e) {
       console.log('ℹ️ Таблица promotions уже существует или ошибка:', e.message);
     }
-    
     // 6. Создаем таблицу support_tickets
     try {
       await query(`
@@ -2619,28 +2347,23 @@ const updateDatabase = async () => {
     } catch (e) {
       console.log('ℹ️ Таблица support_tickets уже существует или ошибка:', e.message);
     }
-    
   } catch (error) {
     console.log('ℹ️ База данных уже обновлена или ошибка:', error.message);
   }
 };
-
-// Функция синхронизации начальных данных
+// 🔧 ФУНКЦИЯ СИНХРОНИЗАЦИИ НАЧАЛЬНЫХ ДАННЫХ
 async function syncInitialItems() {
   try {
     console.log('🔄 Синхронизация начальных данных с фронтендом...');
-
     const syncedItems = getSyncedTopItems('KZT');
     let syncedCount = 0;
-
     for (const item of syncedItems) {
       try {
-        // 🔧 Проверяем существование предмета
+        // 🔧 ИСПРАВЛЕНИЕ: Проверяем существование предмета без ON CONFLICT сначала
         const existingItem = await query(
           'SELECT id FROM items WHERE market_hash_name = $1',
           [item.market_hash_name]
         );
-
         if (existingItem.rows.length === 0) {
           // Добавляем новый предмет
           await query(`
@@ -2696,8 +2419,9 @@ async function syncInitialItems() {
         }
       } catch (err) {
         console.warn(`⚠️ Ошибка синхронизации предмета "${item.name}":`, err.message);
-        // Альтернативный способ: проверить по name
+        // 🔧 АЛЬТЕРНАТИВНЫЙ СПОСОБ: Пробуем без market_hash_name constraint
         try {
+          // Проверяем по name если market_hash_name не работает
           const existingByName = await query(
             'SELECT id FROM items WHERE name = $1',
             [item.name]
@@ -2731,25 +2455,28 @@ async function syncInitialItems() {
         }
       }
     }
-
     console.log(`✅ Синхронизировано ${syncedCount} из ${syncedItems.length} предметов`);
-
     // Проверяем количество товаров в БД
     const check = await query('SELECT COUNT(*) as count FROM items');
     const count = parseInt(check.rows[0].count);
     console.log(`📊 Всего предметов в БД: ${count}`);
-
   } catch (error) {
     console.error('❌ Ошибка синхронизации начальных данных:', error);
   }
 }
-
-// --------------------------------
-// Запуск сервера
-function startServer() {
-  app.listen(PORT, () => {
-    console.log(`🚀 Server запущен на порту ${PORT}!`);
-  });
-}
-
+// ЗАПУСК СЕРВЕРА
+const startServer = async () => {
+  try {
+    await initDB();
+    await updateDatabase();
+    await syncInitialItems(); // 🟢 ВАЖНО: вызов синхронизации
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 Сервер запущен на порту ${PORT}`);
+      console.log(`🌐 Доступен по: ${BACKEND_URL}`);
+    });
+  } catch (error) {
+    console.error('❌ Не удалось запустить сервер:', error);
+    process.exit(1);
+  }
+};
 startServer();
