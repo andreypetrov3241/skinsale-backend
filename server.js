@@ -2625,24 +2625,22 @@ const updateDatabase = async () => {
   }
 };
 
-// 🔧 ФУНКЦИЯ СИНХРОНИЗАЦИИ НАЧАЛЬНЫХ ДАННЫХ
-async function syncInitialItems() {
 // Функция синхронизации начальных данных
 async function syncInitialItems() {
   try {
     console.log('🔄 Синхронизация начальных данных с фронтендом...');
-    
+
     const syncedItems = getSyncedTopItems('KZT');
     let syncedCount = 0;
-    
+
     for (const item of syncedItems) {
       try {
-        // 🔧 ИСПРАВЛЕНИЕ: Проверяем существование предмета без ON CONFLICT сначала
+        // 🔧 Проверяем существование предмета
         const existingItem = await query(
           'SELECT id FROM items WHERE market_hash_name = $1',
           [item.market_hash_name]
         );
-        
+
         if (existingItem.rows.length === 0) {
           // Добавляем новый предмет
           await query(`
@@ -2698,15 +2696,12 @@ async function syncInitialItems() {
         }
       } catch (err) {
         console.warn(`⚠️ Ошибка синхронизации предмета "${item.name}":`, err.message);
-        
-        // 🔧 АЛЬТЕРНАТИВНЫЙ СПОСОБ: Пробуем без market_hash_name constraint
+        // Альтернативный способ: проверить по name
         try {
-          // Проверяем по name если market_hash_name не работает
           const existingByName = await query(
             'SELECT id FROM items WHERE name = $1',
             [item.name]
           );
-          
           if (existingByName.rows.length === 0) {
             await query(`
               INSERT INTO items (
@@ -2736,19 +2731,21 @@ async function syncInitialItems() {
         }
       }
     }
-    
+
     console.log(`✅ Синхронизировано ${syncedCount} из ${syncedItems.length} предметов`);
-    
+
     // Проверяем количество товаров в БД
     const check = await query('SELECT COUNT(*) as count FROM items');
     const count = parseInt(check.rows[0].count);
     console.log(`📊 Всего предметов в БД: ${count}`);
-    
+
   } catch (error) {
     console.error('❌ Ошибка синхронизации начальных данных:', error);
   }
 }
 
+// --------------------------------
+// Запуск сервера
 function startServer() {
   app.listen(PORT, () => {
     console.log(`🚀 Server запущен на порту ${PORT}!`);
