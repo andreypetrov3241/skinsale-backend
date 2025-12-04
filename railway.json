@@ -1,11 +1,31 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
-    "builder": "NIXPACKS"
+    "builder": "NIXPACKS",
+    "nixpacks": {
+      "phases": {
+        "setup": {
+          "nixPkgs": ["nodejs_20", "postgresql"]
+        },
+        "install": {
+          "cmd": "npm ci --ignore-scripts"
+        }
+      }
+    }
   },
   "deploy": {
-    "startCommand": "npm start",
-    "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 10
+    "startCommand": "node --enable-source-maps server.js",
+    "restartPolicyType": "ALWAYS",
+    "restartPolicyMaxRetries": 5,
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 30,
+    "healthcheckInterval": 60,
+    "port": 3000
+  },
+  "env": {
+    "NODE_ENV": "production",
+    "NPM_CONFIG_PRODUCTION": "true",
+    "NPM_CONFIG_AUDIT": "false",
+    "NPM_CONFIG_FUND": "false"
   }
 }

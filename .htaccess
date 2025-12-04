@@ -1,0 +1,12 @@
+RewriteEngine On
+
+# Перенаправление всех API запросов на Node.js сервер
+RewriteCond %{REQUEST_URI} ^/api/ [OR]
+RewriteCond %{REQUEST_URI} ^/auth/ [OR]
+RewriteCond %{REQUEST_URI} ^/payments/
+RewriteRule ^(.*)$ http://localhost:5000/$1 [P,L]
+
+# Для фронтенда - отдаем статику из Apache
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ /index.html [L]
