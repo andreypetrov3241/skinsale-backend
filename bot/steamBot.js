@@ -2,7 +2,7 @@
 import SteamUser from 'steam-user';
 import SteamTotp from 'steam-totp';
 import SteamCommunity from 'steamcommunity';
-import TradeOfferManager from 'tradeoffer-manager';
+import TradeOfferManager from 'steam-tradeoffer-manager'; // Измененный импорт
 import { query } from '../database/db.js';
 import axios from 'axios';
 
@@ -75,9 +75,13 @@ class SteamBot {
     try {
       const logOnOptions = {
         accountName: process.env.BOT_USERNAME,
-        password: process.env.BOT_PASSWORD,
-        twoFactorCode: SteamTotp.getAuthCode(process.env.BOT_SHARED_SECRET)
+        password: process.env.BOT_PASSWORD
       };
+
+      // Если есть shared secret, добавляем twoFactorCode
+      if (process.env.BOT_SHARED_SECRET) {
+        logOnOptions.twoFactorCode = SteamTotp.getAuthCode(process.env.BOT_SHARED_SECRET);
+      }
 
       this.client.logOn(logOnOptions);
       
@@ -88,10 +92,15 @@ class SteamBot {
 
         this.client.once('loggedOn', () => {
           clearTimeout(timeout);
-          this.community.startConfirmationChecker(
-            parseInt(process.env.TRADE_POLL_INTERVAL) || 30000,
-            process.env.BOT_IDENTITY_SECRET
-          );
+          
+          // Запускаем проверку подтверждений если есть identity secret
+          if (process.env.BOT_IDENTITY_SECRET) {
+            this.community.startConfirmationChecker(
+              parseInt(process.env.TRADE_POLL_INTERVAL) || 30000,
+              process.env.BOT_IDENTITY_SECRET
+            );
+          }
+          
           resolve();
         });
 
@@ -135,7 +144,7 @@ class SteamBot {
               tradeOfferId: offer.id,
               state: offer.state,
               status: status,
-              tradeUrl: offer.getOfferUrl()
+              tradeUrl: `https://steamcommunity.com/tradeoffer/${offer.id}/`
             });
           }
         });
@@ -203,14 +212,11 @@ class SteamBot {
       const theirItems = offer.itemsToReceive || [];
       
       // Определяем тип трейда
-      // Если бот получает предметы - это покупка
-      // Если бот отдает предметы - это продажа (должен быть только один предмет)
-      
       if (theirItems.length > 0 && myItems.length === 0) {
         // Покупка предмета у пользователя
         await this.handleBuyOffer(offer, theirItems);
       } else if (myItems.length === 1 && theirItems.length === 0) {
-        // Продажа предмета пользователю - проверяем что это наш оффер
+        // Продажа предмета пользователю
         const isValid = await this.validateSellOffer(offer, myItems[0]);
         if (isValid) {
           console.log('✅ Принимаем оффер на продажу:', offer.id);
@@ -220,7 +226,7 @@ class SteamBot {
           await offer.decline();
         }
       } else {
-        // Неизвестный тип оффера - отклоняем
+        // Неизвестный тип оффера
         console.log('❌ Отклоняем неизвестный оффер:', offer.id);
         await offer.decline();
       }
@@ -333,17 +339,16 @@ class SteamBot {
       
       await query(
         `INSERT INTO transactions (
-          trade_offer_id, user_steam_id, type, status, 
-          item_name, item_image, item_assetid, price, 
+          trade_offer_id, user_id, type, status, 
+          item_name, item_assetid, price, 
           commission, final_amount, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
+        ) VALUES ($1, (SELECT id FROM users WHERE steam_id = $2), $3, $4, $5, $6, $7, $8, $9, NOW())`,
         [
           tradeOfferId,
           steamId,
           'buy',
           'pending',
           itemInfo.name,
-          itemInfo.image_url,
           itemData.assetid,
           price,
           price * this.commissionRate,
@@ -381,8 +386,8 @@ class SteamBot {
 
       // Начисляем средства на баланс пользователя
       await query(
-        'UPDATE users SET balance = balance + $1 WHERE steam_id = $2',
-        [transaction.final_amount, transaction.user_steam_id]
+        'UPDATE users SET balance = balance + $1 WHERE id = $2',
+        [transaction.final_amount, transaction.user_id]
       );
 
       // Добавляем предмет в инвентарь бота
@@ -390,83 +395,8 @@ class SteamBot {
 
       console.log(`✅ Транзакция покупки завершена: ${transaction.item_name}`);
 
-      // Отправляем уведомление пользователю
-      await this.sendNotification(transaction.user_steam_id, {
-        type: 'buy_completed',
-        amount: transaction.final_amount,
-        item_name: transaction.item_name
-      });
-
     } catch (error) {
       console.error('Complete buy transaction error:', error);
-    }
-  }
-
-  // Создание транзакции продажи
-  async createSellTransaction(userId, itemId, tradeOfferId) {
-    try {
-      // Получаем данные о предмете
-      const itemResult = await query(
-        'SELECT * FROM items WHERE id = $1',
-        [itemId]
-      );
-
-      if (itemResult.rows.length === 0) {
-        throw new Error('Item not found');
-      }
-
-      const item = itemResult.rows[0];
-      
-      // Получаем информацию о предмете в инвентаре бота
-      const inventoryItem = await this.getInventoryItemByName(item.market_hash_name);
-      
-      if (!inventoryItem) {
-        throw new Error('Item not found in bot inventory');
-      }
-
-      // Создаем транзакцию
-      await query(
-        `INSERT INTO transactions (
-          trade_offer_id, user_id, type, status, 
-          item_name, item_image, item_assetid, price,
-          created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
-        [
-          tradeOfferId,
-          userId,
-          'sell',
-          'pending',
-          item.name,
-          item.image_url,
-          inventoryItem.assetid,
-          item.price
-        ]
-      );
-
-      console.log(`📝 Создана транзакция продажи: ${item.name} за ${item.price}`);
-
-    } catch (error) {
-      console.error('Create sell transaction error:', error);
-      throw error;
-    }
-  }
-
-  // Завершение транзакции продажи
-  async completeSellTransaction(tradeOfferId) {
-    try {
-      // Обновляем статус транзакции
-      await query(
-        'UPDATE transactions SET status = $1, completed_at = NOW() WHERE trade_offer_id = $2',
-        ['completed', tradeOfferId]
-      );
-
-      // Удаляем предмет из инвентаря бота
-      await this.removeItemFromBotInventory(tradeOfferId);
-
-      console.log(`✅ Транзакция продажи завершена`);
-
-    } catch (error) {
-      console.error('Complete sell transaction error:', error);
     }
   }
 
@@ -480,76 +410,31 @@ class SteamBot {
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
         [
           transaction.item_assetid,
-          730, // CS2 appid
-          '2', // CS2 contextid
+          730,
+          '2',
           transaction.item_name,
           transaction.item_name,
-          transaction.item_image,
+          '',
           transaction.price,
           transaction.id
         ]
       );
 
-      // Обновляем наличие предмета в каталоге
-      await this.updateItemAvailability(transaction.item_name, true);
+      console.log(`📦 Предмет добавлен в инвентарь бота: ${transaction.item_name}`);
 
     } catch (error) {
       console.error('Add item to bot inventory error:', error);
     }
   }
 
-  // Удаление предмета из инвентаря бота
-  async removeItemFromBotInventory(tradeOfferId) {
-    try {
-      const transactionResult = await query(
-        'SELECT item_assetid, item_name FROM transactions WHERE trade_offer_id = $1',
-        [tradeOfferId]
-      );
-
-      if (transactionResult.rows.length === 0) {
-        return;
-      }
-
-      const { item_assetid, item_name } = transactionResult.rows[0];
-
-      // Удаляем из инвентаря бота
-      await query(
-        'DELETE FROM bot_inventory WHERE assetid = $1',
-        [item_assetid]
-      );
-
-      // Обновляем наличие предмета в каталоге
-      await this.updateItemAvailability(item_name, false);
-
-    } catch (error) {
-      console.error('Remove item from bot inventory error:', error);
-    }
-  }
-
-  // Обновление наличия предмета в каталоге
-  async updateItemAvailability(itemName, isAvailable) {
-    try {
-      await query(
-        'UPDATE items SET is_available = $1, updated_at = NOW() WHERE market_hash_name = $2',
-        [isAvailable, itemName]
-      );
-
-      console.log(`🔄 Обновлено наличие: ${itemName} - ${isAvailable ? 'в наличии' : 'нет в наличии'}`);
-
-    } catch (error) {
-      console.error('Update item availability error:', error);
-    }
-  }
-
   // Получение информации о предмете
   async getItemInfo(item) {
     try {
-      // Здесь можно реализовать получение информации о предмете
-      // из Steam API или из локальной базы
+      // Заглушка - в реальной реализации нужно получать информацию из Steam API
       return {
-        name: 'Unknown Item',
+        name: item.market_hash_name || 'Unknown Item',
         image_url: '',
-        market_hash_name: ''
+        market_hash_name: item.market_hash_name || ''
       };
     } catch (error) {
       console.error('Get item info error:', error);
@@ -588,7 +473,7 @@ class SteamBot {
       // Проверяем кэш
       if (this.steamPriceCache.has(marketHashName)) {
         const cached = this.steamPriceCache.get(marketHashName);
-        if (Date.now() - cached.timestamp < parseInt(process.env.STEAM_PRICE_CACHE_TIME) || 3600000) {
+        if (Date.now() - cached.timestamp < (parseInt(process.env.STEAM_PRICE_CACHE_TIME) || 3600000)) {
           return cached.price;
         }
       }
@@ -602,7 +487,8 @@ class SteamBot {
             currency: 5, // RUB
             appid: 730, // CS2
             market_hash_name: marketHashName
-          }
+          },
+          timeout: 5000
         }
       );
 
@@ -630,38 +516,6 @@ class SteamBot {
     }
   }
 
-  // Получение предмета из инвентаря бота по названию
-  async getInventoryItemByName(marketHashName) {
-    try {
-      const result = await query(
-        'SELECT * FROM bot_inventory WHERE market_hash_name = $1 LIMIT 1',
-        [marketHashName]
-      );
-
-      return result.rows.length > 0 ? result.rows[0] : null;
-
-    } catch (error) {
-      console.error('Get inventory item by name error:', error);
-      return null;
-    }
-  }
-
-  // Отправка уведомления
-  async sendNotification(steamId, data) {
-    try {
-      // Здесь можно реализовать отправку уведомления
-      // через WebSocket или сохранить в базу для фронтенда
-      await query(
-        `INSERT INTO notifications (user_steam_id, type, data, is_read, created_at)
-         VALUES ($1, $2, $3, $4, NOW())`,
-        [steamId, data.type, JSON.stringify(data), false]
-      );
-
-    } catch (error) {
-      console.error('Send notification error:', error);
-    }
-  }
-
   // Получение инвентаря бота
   async getBotInventory(appId = 730, contextId = 2) {
     try {
@@ -670,7 +524,7 @@ class SteamBot {
           if (err) {
             reject(err);
           } else {
-            resolve(inventory);
+            resolve(inventory || []);
           }
         });
       });
