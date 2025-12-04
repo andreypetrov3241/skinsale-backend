@@ -1,4 +1,4 @@
-// server.js — ПОЛНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ
+// server.js — ПОЛНАЯ ВЕРСИЯ СО STEAM БОТОМ
 import express from 'express';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
@@ -13,24 +13,32 @@ import { query, initDB } from './db.js';
 import { steamService } from './services/steamService.js';
 import { steamAuth } from './services/steamAuth.js';
 import { makePaymentRequest, paymentUtils } from './services/paymentProxy.js';
+import { steamBot } from './bot/steamBot.js';
+
 dotenv.config();
 const app = express();
 const PORT = parseInt(process.env.PORT || '5000', 10);
+
 // 🔧 ВАЖНО ДЛЯ ПРОКСИ
 app.set('trust proxy', true);
+
 // 🔑 Секреты из .env
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET;
 const SESSION_SECRET = process.env.SESSION_SECRET;
+
 // ✅ URL из .env
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://skinssale.kz';
 const BACKEND_URL = process.env.BACKEND_URL || 'https://backanedservaksale-production.up.railway.app';
+
 console.log('🌐 Frontend URL (на Beget):', FRONTEND_URL);
 console.log('🔧 Backend URL:', BACKEND_URL);
 console.log('🔒 NODE_ENV:', process.env.NODE_ENV);
+
 // ==================== 🛡️ БЕЗОПАСНОСТЬ ====================
 app.use(hpp());
 app.use(mongoSanitize());
+
 // 🔐 CSP
 const cspDirectives = {
   defaultSrc: ["'self'"],
@@ -68,11 +76,13 @@ const cspDirectives = {
   fontSrc: ["'self'", "https://fonts.gstatic.com"],
   formAction: ["'self'", "https://steamcommunity.com", "https://sandboxmerch.paymtech.kz"]
 };
+
 app.use(helmet({
   contentSecurityPolicy: { directives: cspDirectives },
   crossOriginEmbedderPolicy: false,
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
+
 // 🌐 CORS
 const corsOptions = {
   origin: function (origin, callback) {
@@ -132,12 +142,15 @@ const corsOptions = {
   exposedHeaders: ['Content-Range', 'X-Content-Range', 'X-Total-Count'],
   maxAge: 86400
 };
+
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
+
 app.use(cookieParser(SESSION_SECRET));
 app.use(compression());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
 // 🔍 Middleware для логирования запросов
 app.use((req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -149,6 +162,7 @@ app.use((req, res, next) => {
   }
   next();
 });
+
 // ⏱️ Rate limiting
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -157,23 +171,28 @@ const generalLimiter = rateLimit({
   skip: (req) => req.path === '/health',
   keyGenerator: (req) => `${req.ip}-${req.get('user-agent')}`
 });
+
 const paymentLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 100,
   message: { error: 'Слишком много платежных запросов', code: 'PAYMENT_RATE_LIMITED' },
   keyGenerator: (req) => `${req.ip}-${req.get('user-agent')}`
 });
+
 const adminLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 200,
   message: { error: 'Слишком много запросов к админке', code: 'ADMIN_RATE_LIMITED' },
   keyGenerator: (req) => `${req.ip}-${req.get('user-agent')}`
 });
+
 app.use('/api/', generalLimiter);
 app.use('/api/payments/', paymentLimiter);
 app.use('/api/admin/', adminLimiter);
+
 // ==================== 🎯 ВАЛИДАЦИЯ ====================
 const validateSteamId = (steamId) => /^7656119\d{10}$/.test(steamId);
+
 // ==================== 🔐 УТИЛИТЫ ====================
 const generateTokens = (user) => {
   const accessToken = jwt.sign(
@@ -188,6 +207,7 @@ const generateTokens = (user) => {
   );
   return { accessToken, refreshToken };
 };
+
 const authenticateToken = async (req, res, next) => {
   try {
     let token = req.cookies.accessToken;
@@ -250,6 +270,7 @@ const authenticateToken = async (req, res, next) => {
     });
   }
 };
+
 const requireAdmin = (req, res, next) => {
   if (req.user.role !== 'admin' && req.user.role !== 'owner') {
     console.log(`🚫 Недостаточно прав: ${req.user.username} имеет роль ${req.user.role}`);
@@ -262,6 +283,7 @@ const requireAdmin = (req, res, next) => {
   console.log(`👑 Доступ к админке разрешен: ${req.user.username} (${req.user.role})`);
   next();
 };
+
 const requireOwner = (req, res, next) => {
   if (req.user.role !== 'owner') {
     console.log(`🚫 Недостаточно прав владельца: ${req.user.username} имеет роль ${req.user.role}`);
@@ -274,6 +296,574 @@ const requireOwner = (req, res, next) => {
   console.log(`👑 Доступ владельца разрешен: ${req.user.username}`);
   next();
 };
+
+// ==================== 🤖 STEAM BOT API ====================
+
+// Запуск бота
+app.post('/api/bot/start', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    await steamBot.login();
+    res.json({
+      success: true,
+      message: 'Steam бот успешно запущен',
+      status: 'online',
+      steamId: steamBot.botSteamId
+    });
+  } catch (error) {
+    console.error('Bot start error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Ошибка запуска бота',
+      message: error.message,
+      code: 'BOT_START_ERROR'
+    });
+  }
+});
+
+// Статус бота
+app.get('/api/bot/status', authenticateToken, async (req, res) => {
+  try {
+    const inventory = await steamBot.getBotInventory();
+    
+    res.json({
+      success: true,
+      status: steamBot.isLoggedIn ? 'online' : 'offline',
+      steamId: steamBot.botSteamId,
+      inventoryCount: inventory.length,
+      commissionRate: steamBot.commissionRate,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.json({
+      success: true,
+      status: steamBot.isLoggedIn ? 'online' : 'offline',
+      steamId: steamBot.botSteamId,
+      inventoryCount: 0,
+      commissionRate: steamBot.commissionRate,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// ==================== 🛒 МАРКЕТПЛЕЙС РОУТЫ ====================
+
+// 1. ПОКУПКА СКИНА (пользователь покупает у бота)
+app.post('/api/market/buy', authenticateToken, async (req, res) => {
+  try {
+    const { itemId } = req.body;
+    
+    if (!itemId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Укажите ID предмета',
+        code: 'ITEM_ID_REQUIRED'
+      });
+    }
+
+    // Получаем информацию о предмете
+    const itemResult = await query(
+      'SELECT * FROM items WHERE id = $1 AND is_active = true',
+      [itemId]
+    );
+
+    if (itemResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Предмет не найден',
+        code: 'ITEM_NOT_FOUND'
+      });
+    }
+
+    const item = itemResult.rows[0];
+
+    // Проверяем наличие
+    const inventoryResult = await query(
+      'SELECT assetid FROM bot_inventory WHERE market_hash_name = $1 LIMIT 1',
+      [item.market_hash_name]
+    );
+
+    if (inventoryResult.rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Предмет временно отсутствует',
+        code: 'ITEM_OUT_OF_STOCK'
+      });
+    }
+
+    const inventoryItem = inventoryResult.rows[0];
+
+    // Проверяем баланс пользователя
+    if (req.user.balance < item.price) {
+      return res.status(400).json({
+        success: false,
+        error: 'Недостаточно средств на балансе',
+        code: 'INSUFFICIENT_BALANCE',
+        required: item.price,
+        current: req.user.balance
+      });
+    }
+
+    // Снимаем деньги с баланса пользователя
+    await query(
+      'UPDATE users SET balance = balance - $1 WHERE id = $2',
+      [item.price, req.user.id]
+    );
+
+    // Создаем трейд оффер
+    const tradeOffer = await steamBot.createSellOffer(
+      req.user.steam_id,
+      {
+        appid: 730,
+        contextid: '2',
+        assetid: inventoryItem.assetid
+      }
+    );
+
+    // Создаем транзакцию
+    await query(
+      `INSERT INTO transactions (
+        user_id, type, status, item_id, item_name, 
+        item_price, trade_offer_id, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+      [
+        req.user.id,
+        'buy',
+        'pending',
+        item.id,
+        item.name,
+        item.price,
+        tradeOffer.tradeOfferId
+      ]
+    );
+
+    // Обновляем баланс пользователя
+    const updatedUser = await query(
+      'SELECT balance FROM users WHERE id = $1',
+      [req.user.id]
+    );
+
+    res.json({
+      success: true,
+      message: 'Трейд оффер создан',
+      tradeOfferId: tradeOffer.tradeOfferId,
+      tradeUrl: tradeOffer.tradeUrl,
+      item: {
+        id: item.id,
+        name: item.name,
+        price: item.price
+      },
+      newBalance: parseFloat(updatedUser.rows[0].balance)
+    });
+
+  } catch (error) {
+    console.error('Buy item error:', error);
+    
+    // Возвращаем деньги если ошибка
+    if (req.user && req.user.id) {
+      await query(
+        'UPDATE users SET balance = balance + $1 WHERE id = $2',
+        [req.body.itemPrice || 0, req.user.id]
+      );
+    }
+    
+    res.status(500).json({
+      success: false,
+      error: 'Ошибка при покупке предмета',
+      message: error.message,
+      code: 'BUY_ITEM_ERROR'
+    });
+  }
+});
+
+// 2. ПРОДАЖА СКИНА (пользователь продает боту)
+app.post('/api/market/sell', authenticateToken, async (req, res) => {
+  try {
+    const { assetid, appid = 730, contextid = '2' } = req.body;
+    
+    if (!assetid) {
+      return res.status(400).json({
+        success: false,
+        error: 'Укажите assetid предмета',
+        code: 'ASSETID_REQUIRED'
+      });
+    }
+
+    // Получаем информацию о предмете из Steam
+    const inventory = await steamService.getUserInventory(req.user.steam_id, appid);
+    const item = inventory.find(i => i.assetid === assetid);
+    
+    if (!item) {
+      return res.status(404).json({
+        success: false,
+        error: 'Предмет не найден в вашем инвентаре',
+        code: 'ITEM_NOT_IN_INVENTORY'
+      });
+    }
+
+    // Рассчитываем цену покупки
+    const buyPrice = await steamBot.calculateBuyPrice(item);
+    
+    if (buyPrice <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Не удалось определить цену предмета',
+        code: 'PRICE_CALCULATION_ERROR'
+      });
+    }
+
+    // Создаем трейд оффер на покупку
+    const tradeOffer = await steamBot.createBuyOffer(
+      req.user.steam_id,
+      {
+        appid: appid,
+        contextid: contextid,
+        assetid: assetid
+      },
+      buyPrice
+    );
+
+    res.json({
+      success: true,
+      message: 'Трейд оффер на покупку создан',
+      tradeOfferId: tradeOffer.tradeOfferId,
+      price: buyPrice,
+      commission: tradeOffer.commission,
+      finalAmount: tradeOffer.finalAmount,
+      item: {
+        name: item.name,
+        image: item.image_url
+      }
+    });
+
+  } catch (error) {
+    console.error('Sell item error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Ошибка при создании оффера на продажу',
+      message: error.message,
+      code: 'SELL_ITEM_ERROR'
+    });
+  }
+});
+
+// 3. ПРОВЕРКА СТАТУСА ТРЕЙДА
+app.get('/api/market/trade/:tradeOfferId', authenticateToken, async (req, res) => {
+  try {
+    const { tradeOfferId } = req.params;
+    
+    // Получаем информацию о трейде из базы
+    const tradeResult = await query(
+      `SELECT t.*, i.name as item_name, i.image_url 
+       FROM transactions t
+       LEFT JOIN items i ON t.item_id = i.id
+       WHERE t.trade_offer_id = $1 AND t.user_id = $2`,
+      [tradeOfferId, req.user.id]
+    );
+
+    if (tradeResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Трейд не найден',
+        code: 'TRADE_NOT_FOUND'
+      });
+    }
+
+    const trade = tradeResult.rows[0];
+    
+    // Получаем актуальный статус из Steam
+    const manager = steamBot.manager;
+    const offer = await new Promise((resolve) => {
+      manager.getOffer(tradeOfferId, (err, offer) => {
+        if (err) resolve(null);
+        else resolve(offer);
+      });
+    });
+
+    let steamStatus = 'unknown';
+    if (offer) {
+      steamStatus = offer.state;
+      
+      // Обновляем статус в базе если изменился
+      if (trade.status !== steamStatus) {
+        await query(
+          'UPDATE transactions SET status = $1, updated_at = NOW() WHERE trade_offer_id = $2',
+          [steamStatus, tradeOfferId]
+        );
+        
+        // Если трейд завершен, обновляем баланс
+        if (steamStatus === 'Accepted' && trade.type === 'sell') {
+          const transaction = await query(
+            'SELECT final_amount FROM transactions WHERE trade_offer_id = $1',
+            [tradeOfferId]
+          );
+          
+          if (transaction.rows.length > 0) {
+            await query(
+              'UPDATE users SET balance = balance + $1 WHERE id = $2',
+              [transaction.rows[0].final_amount, req.user.id]
+            );
+          }
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      trade: {
+        ...trade,
+        steamStatus: steamStatus,
+        status: steamStatus !== 'unknown' ? steamStatus : trade.status
+      }
+    });
+
+  } catch (error) {
+    console.error('Check trade status error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Ошибка проверки статуса трейда',
+      code: 'TRADE_STATUS_ERROR'
+    });
+  }
+});
+
+// 4. ИСТОРИЯ ТРЕЙДОВ ПОЛЬЗОВАТЕЛЯ
+app.get('/api/market/history', authenticateToken, async (req, res) => {
+  try {
+    const { limit = 20, page = 1, type } = req.query;
+    const offset = (page - 1) * limit;
+    
+    let queryText = `
+      SELECT t.*, i.name as item_name, i.image_url 
+      FROM transactions t
+      LEFT JOIN items i ON t.item_id = i.id
+      WHERE t.user_id = $1
+    `;
+    
+    let queryParams = [req.user.id];
+    
+    if (type && (type === 'buy' || type === 'sell')) {
+      queryText += ' AND t.type = $2';
+      queryParams.push(type);
+    }
+    
+    queryText += ' ORDER BY t.created_at DESC LIMIT $' + (queryParams.length + 1) + ' OFFSET $' + (queryParams.length + 2);
+    queryParams.push(parseInt(limit), offset);
+    
+    const historyResult = await query(queryText, queryParams);
+    
+    const totalResult = await query(
+      'SELECT COUNT(*) as total FROM transactions WHERE user_id = $1' + (type ? ' AND type = $2' : ''),
+      type ? [req.user.id, type] : [req.user.id]
+    );
+    
+    res.json({
+      success: true,
+      history: historyResult.rows,
+      total: parseInt(totalResult.rows[0].total),
+      page: parseInt(page),
+      limit: parseInt(limit)
+    });
+
+  } catch (error) {
+    console.error('Trade history error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Ошибка получения истории трейдов',
+      code: 'TRADE_HISTORY_ERROR'
+    });
+  }
+});
+
+// 5. РАССЧИТАТЬ ЦЕНУ ПРОДАЖИ
+app.post('/api/market/calculate-price', authenticateToken, async (req, res) => {
+  try {
+    const { market_hash_name } = req.body;
+    
+    if (!market_hash_name) {
+      return res.status(400).json({
+        success: false,
+        error: 'Укажите market_hash_name предмета',
+        code: 'MARKET_HASH_NAME_REQUIRED'
+      });
+    }
+
+    // Получаем рыночную цену
+    const marketPrice = await steamBot.getMarketPrice(market_hash_name);
+    
+    if (!marketPrice) {
+      return res.status(400).json({
+        success: false,
+        error: 'Не удалось получить цену предмета',
+        code: 'PRICE_FETCH_ERROR'
+      });
+    }
+
+    // Рассчитываем цену покупки с учетом комиссии
+    const buyPrice = marketPrice * (1 - steamBot.commissionRate);
+    const commission = marketPrice * steamBot.commissionRate;
+    
+    res.json({
+      success: true,
+      marketPrice: parseFloat(marketPrice.toFixed(2)),
+      buyPrice: parseFloat(buyPrice.toFixed(2)),
+      commission: parseFloat(commission.toFixed(2)),
+      commissionRate: steamBot.commissionRate,
+      currency: 'USD'
+    });
+
+  } catch (error) {
+    console.error('Calculate price error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Ошибка расчета цены',
+      code: 'PRICE_CALCULATION_ERROR'
+    });
+  }
+});
+
+// ==================== 🛠️ АДМИН РОУТЫ ДЛЯ УПРАВЛЕНИЯ БОТОМ ====================
+
+// ИНВЕНТАРЬ БОТА
+app.get('/api/admin/bot/inventory', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const inventory = await steamBot.getBotInventory();
+    
+    // Получаем предметы из базы данных
+    const dbInventoryResult = await query(`
+      SELECT bi.*, i.name as display_name, i.price 
+      FROM bot_inventory bi
+      LEFT JOIN items i ON bi.market_hash_name = i.market_hash_name
+      ORDER BY bi.added_at DESC
+    `);
+    
+    res.json({
+      success: true,
+      steamInventory: inventory,
+      dbInventory: dbInventoryResult.rows,
+      totalCount: inventory.length
+    });
+    
+  } catch (error) {
+    console.error('Get bot inventory error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Ошибка получения инвентаря бота',
+      code: 'BOT_INVENTORY_ERROR'
+    });
+  }
+});
+
+// СИНХРОНИЗАЦИЯ ИНВЕНТАРЯ
+app.post('/api/admin/bot/sync', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    // Получаем актуальный инвентарь из Steam
+    const steamInventory = await steamBot.getBotInventory();
+    
+    // Очищаем старый инвентарь
+    await query('DELETE FROM bot_inventory');
+    
+    // Добавляем новые предметы
+    let addedCount = 0;
+    
+    for (const item of steamInventory) {
+      try {
+        // Ищем предмет в базе по market_hash_name
+        const itemResult = await query(
+          'SELECT id, market_hash_name, name, image_url, price FROM items WHERE market_hash_name = $1',
+          [item.market_hash_name]
+        );
+        
+        if (itemResult.rows.length > 0) {
+          const dbItem = itemResult.rows[0];
+          
+          await query(
+            `INSERT INTO bot_inventory (
+              assetid, appid, contextid, market_hash_name,
+              name, image_url, price, added_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+            [
+              item.assetid,
+              item.appid,
+              item.contextid,
+              item.market_hash_name,
+              dbItem.name,
+              dbItem.image_url,
+              dbItem.price
+            ]
+          );
+          
+          addedCount++;
+        }
+      } catch (error) {
+        console.error(`Error adding item ${item.market_hash_name}:`, error);
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Синхронизировано ${addedCount} предметов`,
+      addedCount: addedCount,
+      totalInSteam: steamInventory.length
+    });
+    
+  } catch (error) {
+    console.error('Sync inventory error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Ошибка синхронизации инвентаря',
+      code: 'INVENTORY_SYNC_ERROR'
+    });
+  }
+});
+
+// ТРАНЗАКЦИИ БОТА
+app.get('/api/admin/bot/transactions', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { limit = 50, page = 1, status } = req.query;
+    const offset = (page - 1) * limit;
+    
+    let queryText = `
+      SELECT t.*, u.username, u.steam_id 
+      FROM transactions t
+      JOIN users u ON t.user_id = u.id
+      WHERE 1=1
+    `;
+    
+    let queryParams = [];
+    
+    if (status) {
+      queryText += ' AND t.status = $1';
+      queryParams.push(status);
+    }
+    
+    queryText += ' ORDER BY t.created_at DESC LIMIT $' + (queryParams.length + 1) + ' OFFSET $' + (queryParams.length + 2);
+    queryParams.push(parseInt(limit), offset);
+    
+    const transactionsResult = await query(queryText, queryParams);
+    
+    const totalResult = await query(
+      'SELECT COUNT(*) as total FROM transactions' + (status ? ' WHERE status = $1' : ''),
+      status ? [status] : []
+    );
+    
+    res.json({
+      success: true,
+      transactions: transactionsResult.rows,
+      total: parseInt(totalResult.rows[0].total),
+      page: parseInt(page),
+      limit: parseInt(limit)
+    });
+    
+  } catch (error) {
+    console.error('Get bot transactions error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Ошибка получения транзакций бота',
+      code: 'BOT_TRANSACTIONS_ERROR'
+    });
+  }
+});
+
 // ==================== 💰 БАЛАНС И ПЛАТЕЖИ ====================
 // 💵 ПОПОЛНЕНИЕ БАЛАНСА
 app.post('/api/payments/deposit', authenticateToken, async (req, res) => {
@@ -578,6 +1168,7 @@ app.get('/api/payments/test', async (req, res) => {
     });
   }
 });
+
 // ==================== ✅ STEAM AUTH FLOW ====================
 app.get('/api/auth/steam', (req, res) => {
   console.log('🔐 Запрос Steam аутентификации от:', req.ip);
@@ -816,6 +1407,7 @@ app.post('/api/auth/dev-login', async (req, res) => {
     res.status(500).json({ error: 'Ошибка авторизации', code: 'AUTH_ERROR' });
   }
 });
+
 // ==================== 🚀 ОСНОВНЫЕ РОУТЫ ====================
 app.get('/api/user/profile', authenticateToken, async (req, res) => {
   try {
@@ -845,6 +1437,7 @@ app.get('/api/steam/my-inventory', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Ошибка получения инвентаря', code: 'INVENTORY_ERROR' });
   }
 });
+
 // ==================== 🏪 КАТАЛОГ ТОВАРОВ ====================
 app.get('/api/catalog/items', async (req, res) => {
   try {
@@ -1035,6 +1628,7 @@ app.get('/api/catalog/items/:id', async (req, res) => {
     });
   }
 });
+
 // ==================== 🏆 ТОП ПРЕДМЕТЫ ====================
 // 🔧 ФУНКЦИЯ ДЛЯ СИНХРОНИЗИРОВАННЫХ ДАННЫХ
 function getSyncedTopItems(currency = 'KZT') {
@@ -1160,6 +1754,7 @@ function getSyncedTopItems(currency = 'KZT') {
   ];
   return syncedItems;
 }
+
 // 🔧 ФУНКЦИЯ СИНХРОНИЗАЦИИ С БАЗОЙ ДАННЫХ
 async function syncItemsWithDatabase(items) {
   try {
@@ -1230,6 +1825,7 @@ async function syncItemsWithDatabase(items) {
     console.error('❌ Ошибка синхронизации с БД:', error.message);
   }
 }
+
 app.get('/api/catalog/top', async (req, res) => {
   try {
     const { currency = 'KZT', limit = 12 } = req.query;
@@ -1319,6 +1915,7 @@ app.get('/api/catalog/top', async (req, res) => {
     }
   }
 });
+
 // Получение подкатегорий
 app.get('/api/catalog/subcategories', async (req, res) => {
   try {
@@ -1348,6 +1945,7 @@ app.get('/api/catalog/subcategories', async (req, res) => {
     });
   }
 });
+
 // ==================== 👑 АДМИНКА ====================
 // 📦 Управление товарами
 app.get('/api/admin/items', authenticateToken, requireAdmin, async (req, res) => {
@@ -1402,6 +2000,7 @@ app.get('/api/admin/items', authenticateToken, requireAdmin, async (req, res) =>
     res.status(500).json({ error: 'Ошибка получения товаров', code: 'ADMIN_ITEMS_ERROR' });
   }
 });
+
 // Создание товара
 app.post('/api/admin/items', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -1469,6 +2068,7 @@ app.post('/api/admin/items', authenticateToken, requireAdmin, async (req, res) =
     res.status(500).json({ error: 'Ошибка создания товара', code: 'CREATE_ITEM_ERROR' });
   }
 });
+
 // Обновление товара
 app.put('/api/admin/items/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -1531,6 +2131,7 @@ app.put('/api/admin/items/:id', authenticateToken, requireAdmin, async (req, res
     res.status(500).json({ error: 'Ошибка обновления товара', code: 'UPDATE_ITEM_ERROR' });
   }
 });
+
 // Удаление товара
 app.delete('/api/admin/items/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -1557,6 +2158,7 @@ app.delete('/api/admin/items/:id', authenticateToken, requireAdmin, async (req, 
     res.status(500).json({ error: 'Ошибка удаления товара', code: 'DELETE_ITEM_ERROR' });
   }
 });
+
 // Изменение статуса активности
 app.put('/api/admin/items/:id/toggle', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -1582,6 +2184,7 @@ app.put('/api/admin/items/:id/toggle', authenticateToken, requireAdmin, async (r
     res.status(500).json({ error: 'Ошибка изменения статуса товара', code: 'TOGGLE_ITEM_ERROR' });
   }
 });
+
 // Изменение статуса рекомендуемого
 app.put('/api/admin/items/:id/featured', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -1607,6 +2210,7 @@ app.put('/api/admin/items/:id/featured', authenticateToken, requireAdmin, async 
     res.status(500).json({ error: 'Ошибка изменения статуса рекомендуемого', code: 'TOGGLE_FEATURED_ERROR' });
   }
 });
+
 // Изменение статуса трендового
 app.put('/api/admin/items/:id/trending', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -1632,6 +2236,7 @@ app.put('/api/admin/items/:id/trending', authenticateToken, requireAdmin, async 
     res.status(500).json({ error: 'Ошибка изменения статуса трендового', code: 'TOGGLE_TRENDING_ERROR' });
   }
 });
+
 // 🏆 Управление ТОП товарами
 app.get('/api/admin/top', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -1662,6 +2267,7 @@ app.get('/api/admin/top', authenticateToken, requireAdmin, async (req, res) => {
     res.status(500).json({ error: 'Ошибка получения ТОП товаров', code: 'GET_TOP_ERROR' });
   }
 });
+
 // Сохранение ТОП товаров
 app.post('/api/admin/top', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -1707,6 +2313,7 @@ app.post('/api/admin/top', authenticateToken, requireAdmin, async (req, res) => 
     res.status(500).json({ error: 'Ошибка сохранения ТОП товаров', code: 'SAVE_TOP_ERROR' });
   }
 });
+
 // 👥 Управление пользователями
 app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -1750,6 +2357,7 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =>
     res.status(500).json({ error: 'Ошибка получения пользователей', code: 'ADMIN_USERS_ERROR' });
   }
 });
+
 // Пополнение баланса пользователя
 app.post('/api/admin/update-balance', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -1801,6 +2409,7 @@ app.post('/api/admin/update-balance', authenticateToken, requireAdmin, async (re
     res.status(500).json({ error: 'Ошибка пополнения баланса', code: 'UPDATE_BALANCE_ERROR' });
   }
 });
+
 // Блокировка/разблокировка пользователя
 app.post('/api/admin/toggle-user', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -1825,6 +2434,7 @@ app.post('/api/admin/toggle-user', authenticateToken, requireAdmin, async (req, 
     res.status(500).json({ error: 'Ошибка изменения статуса пользователя', code: 'TOGGLE_USER_ERROR' });
   }
 });
+
 // 🛡️ Управление администраторами
 app.get('/api/admin/admins', authenticateToken, requireOwner, async (req, res) => {
   try {
@@ -1844,6 +2454,7 @@ app.get('/api/admin/admins', authenticateToken, requireOwner, async (req, res) =
     res.status(500).json({ error: 'Ошибка получения списка администраторов', code: 'GET_ADMINS_ERROR' });
   }
 });
+
 // Добавление администратора
 app.post('/api/admin/admins', authenticateToken, requireOwner, async (req, res) => {
   try {
@@ -1875,6 +2486,7 @@ app.post('/api/admin/admins', authenticateToken, requireOwner, async (req, res) 
     res.status(500).json({ error: 'Ошибка добавления администратора', code: 'ADD_ADMIN_ERROR' });
   }
 });
+
 // Удаление администратора
 app.delete('/api/admin/admins/:steamId', authenticateToken, requireOwner, async (req, res) => {
   try {
@@ -1905,6 +2517,7 @@ app.delete('/api/admin/admins/:steamId', authenticateToken, requireOwner, async 
     res.status(500).json({ error: 'Ошибка удаления администратора', code: 'REMOVE_ADMIN_ERROR' });
   }
 });
+
 // 📊 Транзакции
 app.get('/api/admin/transactions', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -1946,6 +2559,7 @@ app.get('/api/admin/transactions', authenticateToken, requireAdmin, async (req, 
     res.status(500).json({ error: 'Ошибка получения транзакций', code: 'ADMIN_TRANSACTIONS_ERROR' });
   }
 });
+
 // 📋 Статистика
 app.get('/api/admin/stats', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -2003,6 +2617,7 @@ app.get('/api/admin/stats', authenticateToken, requireAdmin, async (req, res) =>
     });
   }
 });
+
 // 📨 Управление тикетами
 app.get('/api/admin/tickets', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -2038,6 +2653,7 @@ app.get('/api/admin/tickets', authenticateToken, requireAdmin, async (req, res) 
     res.status(500).json({ error: 'Ошибка получения тикетов', code: 'GET_TICKETS_ERROR' });
   }
 });
+
 // Ответ на тикет
 app.post('/api/admin/tickets/:id/reply', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -2083,6 +2699,7 @@ app.post('/api/admin/tickets/:id/reply', authenticateToken, requireAdmin, async 
     res.status(500).json({ error: 'Ошибка отправки ответа', code: 'REPLY_TICKET_ERROR' });
   }
 });
+
 // Изменение статуса тикета
 app.put('/api/admin/tickets/:id/status', authenticateToken, requireAdmin, async (req, res) => {
   try {
@@ -2115,6 +2732,7 @@ app.put('/api/admin/tickets/:id/status', authenticateToken, requireAdmin, async 
     res.status(500).json({ error: 'Ошибка обновления статуса тикета', code: 'UPDATE_TICKET_STATUS_ERROR' });
   }
 });
+
 // ==================== 🏪 МАРКЕТ ====================
 app.get('/api/items/market', async (req, res) => {
   try {
@@ -2171,6 +2789,7 @@ app.get('/api/items/market', async (req, res) => {
     });
   }
 });
+
 // Поиск
 app.get('/api/items/search', async (req, res) => {
   try {
@@ -2221,6 +2840,7 @@ app.get('/api/items/search', async (req, res) => {
     });
   }
 });
+
 // ==================== 🩺 HEALTH & START ====================
 app.get('/health', async (req, res) => {
   try {
@@ -2229,16 +2849,20 @@ app.get('/health', async (req, res) => {
       SELECT 
         (SELECT COUNT(*) FROM items) as items_count,
         (SELECT COUNT(*) FROM users) as users_count,
-        (SELECT COUNT(*) FROM payments) as payments_count
+        (SELECT COUNT(*) FROM payments) as payments_count,
+        (SELECT COUNT(*) FROM transactions) as transactions_count,
+        (SELECT COUNT(*) FROM bot_inventory) as bot_inventory_count
     `);
     res.json({ 
       status: 'healthy', 
       database: 'OK',
       tables: tablesCheck.rows[0],
+      bot_status: steamBot.isLoggedIn ? 'online' : 'offline',
       timestamp: new Date().toISOString(),
       server: 'SkinSale API',
-      version: '3.0.1',
+      version: '4.0.0',
       features: {
+        steam_bot: 'enabled',
         admin_panel: 'enabled',
         catalog: 'enabled',
         payments: 'enabled',
@@ -2254,6 +2878,7 @@ app.get('/health', async (req, res) => {
     });
   }
 });
+
 // Обработка несуществующих API роутов
 app.use('/api/*', (req, res) => {
   res.status(404).json({ 
@@ -2262,6 +2887,7 @@ app.use('/api/*', (req, res) => {
     path: req.originalUrl 
   });
 });
+
 // Глобальный обработчик ошибок
 app.use((error, req, res, next) => {
   console.error('🚨 Глобальная ошибка:', error);
@@ -2271,21 +2897,59 @@ app.use((error, req, res, next) => {
     message: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
   });
 });
+
 // ==================== 🔧 ФУНКЦИЯ ОБНОВЛЕНИЯ БАЗЫ ДАННЫХ ====================
 const updateDatabase = async () => {
   try {
     console.log('🔄 Проверка структуры базы данных...');
-    // 1. Добавляем колонку email в users
+    
+    // 1. Создаем таблицу транзакций если её нет
+    await query(`
+      CREATE TABLE IF NOT EXISTS transactions (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id),
+        type VARCHAR(20) NOT NULL,
+        status VARCHAR(50) DEFAULT 'pending',
+        item_id INTEGER REFERENCES items(id),
+        item_name VARCHAR(255),
+        item_price DECIMAL(10,2),
+        trade_offer_id VARCHAR(100) UNIQUE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        completed_at TIMESTAMPTZ
+      )
+    `);
+    console.log('✅ Таблица transactions создана/проверена');
+    
+    // 2. Создаем таблицу инвентаря бота если её нет
+    await query(`
+      CREATE TABLE IF NOT EXISTS bot_inventory (
+        id SERIAL PRIMARY KEY,
+        assetid VARCHAR(100) UNIQUE NOT NULL,
+        appid INTEGER NOT NULL,
+        contextid VARCHAR(20) NOT NULL,
+        market_hash_name VARCHAR(255) NOT NULL,
+        name VARCHAR(255),
+        image_url TEXT,
+        price DECIMAL(10,2),
+        transaction_id INTEGER REFERENCES transactions(id),
+        added_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    console.log('✅ Таблица bot_inventory создана/проверена');
+    
+    // 3. Добавляем колонку is_available в items если её нет
     try {
       await query(`
-        ALTER TABLE users 
-        ADD COLUMN IF NOT EXISTS email VARCHAR(255)
+        ALTER TABLE items 
+        ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT true
       `);
-      console.log('✅ Колонка email добавлена или уже существует');
+      console.log('✅ Колонка is_available добавлена в items');
     } catch (e) {
-      console.log('ℹ️ Колонка email уже существует:', e.message);
+      console.log('✅ Колонка is_available уже существует в items');
     }
-    // 2. Добавляем недостающие колонки в items
+    
+    // 4. Добавляем недостающие колонки в items
     const columnsToAdd = [
       { name: 'steam_price', type: 'NUMERIC(10,2)' },
       { name: 'discount_price', type: 'NUMERIC(10,2)' },
@@ -2295,6 +2959,7 @@ const updateDatabase = async () => {
       { name: 'is_trending', type: 'BOOLEAN DEFAULT false' },
       { name: 'subcategory', type: 'TEXT' }
     ];
+    
     for (const column of columnsToAdd) {
       try {
         await query(`
@@ -2305,28 +2970,8 @@ const updateDatabase = async () => {
         console.log(`ℹ️ Колонка ${column.name} уже существует или ошибка:`, e.message);
       }
     }
-    // 3. Добавляем UNIQUE constraint для market_hash_name
-    try {
-      const checkConstraint = await query(`
-        SELECT constraint_name 
-        FROM information_schema.table_constraints 
-        WHERE table_name = 'items' 
-          AND constraint_type = 'UNIQUE' 
-          AND constraint_name LIKE '%market_hash_name%'
-      `);
-      if (checkConstraint.rows.length === 0) {
-        await query(`
-          ALTER TABLE items 
-          ADD CONSTRAINT unique_market_hash_name UNIQUE (market_hash_name)
-        `);
-        console.log('✅ Unique constraint добавлен для market_hash_name');
-      } else {
-        console.log('✅ Unique constraint уже существует для market_hash_name');
-      }
-    } catch (e) {
-      console.log('ℹ️ Unique constraint для market_hash_name:', e.message);
-    }
-    // 4. Создаем таблицу top_items
+    
+    // 5. Создаем таблицу top_items если её нет
     try {
       await query(`
         CREATE TABLE IF NOT EXISTS top_items (
@@ -2341,26 +2986,8 @@ const updateDatabase = async () => {
     } catch (e) {
       console.log('ℹ️ Таблица top_items уже существует или ошибка:', e.message);
     }
-    // 5. Создаем таблицу promotions
-    try {
-      await query(`
-        CREATE TABLE IF NOT EXISTS promotions (
-          id SERIAL PRIMARY KEY,
-          name VARCHAR(255) NOT NULL,
-          discount DECIMAL(5,2) NOT NULL,
-          item_ids JSONB NOT NULL,
-          start_date DATE NOT NULL,
-          end_date DATE NOT NULL,
-          is_active BOOLEAN DEFAULT true,
-          created_at TIMESTAMPTZ DEFAULT NOW(),
-          updated_at TIMESTAMPTZ DEFAULT NOW()
-        )
-      `);
-      console.log('✅ Таблица promotions создана или уже существует');
-    } catch (e) {
-      console.log('ℹ️ Таблица promotions уже существует или ошибка:', e.message);
-    }
-    // 6. Создаем таблицу support_tickets
+    
+    // 6. Создаем таблицу поддержки если её нет
     try {
       await query(`
         CREATE TABLE IF NOT EXISTS support_tickets (
@@ -2380,10 +3007,14 @@ const updateDatabase = async () => {
     } catch (e) {
       console.log('ℹ️ Таблица support_tickets уже существует или ошибка:', e.message);
     }
+    
+    console.log('✅ База данных обновлена');
+    
   } catch (error) {
     console.log('ℹ️ База данных уже обновлена или ошибка:', error.message);
   }
 };
+
 // 🔧 ФУНКЦИЯ СИНХРОНИЗАЦИИ НАЧАЛЬНЫХ ДАННЫХ
 async function syncInitialItems() {
   try {
@@ -2456,44 +3087,73 @@ async function syncInitialItems() {
 
     // 🔥 КЛЮЧЕВОЕ: Заполняем top_items на основе флагов
     console.log('🔄 Синхронизация top_items на основе is_featured/is_trending...');
-    await query('DELETE FROM top_items'); // Очищаем перед пересозданием
+    try {
+      await query('DELETE FROM top_items'); // Очищаем перед пересозданием
 
-    const trendingItems = await query(`
-      SELECT id FROM items 
-      WHERE (is_trending = true OR is_featured = true) 
-        AND is_active = true
-      ORDER BY is_featured DESC, is_trending DESC, created_at DESC
-      LIMIT 10
-    `);
+      const trendingItems = await query(`
+        SELECT id FROM items 
+        WHERE (is_trending = true OR is_featured = true) 
+          AND is_active = true
+        ORDER BY is_featured DESC, is_trending DESC, created_at DESC
+        LIMIT 10
+      `);
 
-    for (let i = 0; i < trendingItems.rows.length; i++) {
-      const itemId = trendingItems.rows[i].id;
-      await query(
-        'INSERT INTO top_items (item_id, position) VALUES ($1, $2)',
-        [itemId, i + 1]
-      );
+      for (let i = 0; i < trendingItems.rows.length; i++) {
+        const itemId = trendingItems.rows[i].id;
+        await query(
+          'INSERT INTO top_items (item_id, position) VALUES ($1, $2)',
+          [itemId, i + 1]
+        );
+      }
+    } catch (e) {
+      console.log('Не удалось создать top_items:', e.message);
     }
 
-    console.log(`✅ Синхронизировано ${syncedCount} предметов и ${trendingItems.rows.length} ТОП-позиций`);
+    console.log(`✅ Синхронизировано ${syncedCount} предметов`);
     const totalCount = await query('SELECT COUNT(*) as count FROM items');
     console.log(`📊 Всего предметов в БД: ${parseInt(totalCount.rows[0].count)}`);
   } catch (error) {
     console.error('❌ Ошибка синхронизации начальных данных:', error);
   }
 }
+
 // ЗАПУСК СЕРВЕРА
 const startServer = async () => {
   try {
     await initDB();
     await updateDatabase();
     await syncInitialItems(); // 🟢 ВАЖНО: вызов синхронизации
+    
+    // Пытаемся запустить бота при старте
+    try {
+      await steamBot.login();
+      console.log('🤖 Steam бот успешно запущен');
+    } catch (botError) {
+      console.warn('⚠️ Steam бот не смог запуститься:', botError.message);
+      console.log('🔄 Бот будет запущен при запросе к /api/bot/start');
+    }
+    
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Сервер запущен на порту ${PORT}`);
       console.log(`🌐 Доступен по: ${BACKEND_URL}`);
+      console.log(`🤖 Статус бота: ${steamBot.isLoggedIn ? '✅ ONLINE' : '❌ OFFLINE'}`);
+      console.log('📊 Доступные API роуты:');
+      console.log('  POST   /api/market/buy           - Купить предмет у бота');
+      console.log('  POST   /api/market/sell          - Продать предмет боту');
+      console.log('  GET    /api/market/trade/:id     - Проверить статус трейда');
+      console.log('  GET    /api/market/history       - История трейдов');
+      console.log('  POST   /api/bot/start            - Запустить бота (админ)');
+      console.log('  GET    /api/bot/status           - Статус бота');
+      console.log('  POST   /api/payments/deposit     - Пополнить баланс');
+      console.log('  POST   /api/payments/withdraw    - Вывести средства');
+      console.log('  GET    /api/catalog/items        - Каталог товаров');
+      console.log('  GET    /api/admin/items          - Админка товаров');
+      console.log('  GET    /health                   - Проверка здоровья сервера');
     });
   } catch (error) {
     console.error('❌ Не удалось запустить сервер:', error);
     process.exit(1);
   }
 };
+
 startServer();
