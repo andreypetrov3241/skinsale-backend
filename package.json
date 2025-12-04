@@ -30,16 +30,13 @@
     "pg": "^8.13.1",
     "redis": "^4.6.13",
     
-    // Steam библиотеки
     "steam-user": "^5.2.0",
     "steam-totp": "^2.1.2",
     "steamcommunity": "^3.45.0",
     "steamid": "^2.0.0",
     
-    // Вместо tradeoffer-manager используем steam-tradeoffer-manager
     "steam-tradeoffer-manager": "^2.11.0",
     
-    // Дополнительные утилиты
     "toobusy-js": "^0.5.1",
     "uuid": "^10.0.0"
   },
